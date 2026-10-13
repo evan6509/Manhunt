@@ -1,0 +1,117 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main, codex/development]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize version selection through publication; keep queued main pushes.
+concurrency:
+  group: manhunt-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'release' || github.run_id }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Write access is needed to include unfinished draft releases in the listing.
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp > "$RUNNER_TEMP/releases.json"
+          python3 scripts/release_version.py "$RUNNER_TEMP/releases.json"
+
+  build:
+    name: Build and test
+    needs: version
+    if: ${{ !cancelled() && (needs.version.result == 'success' || needs.version.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Use selected release version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SELECTED_VERSION: ${{ needs.version.outputs.version }}
+        run: printf 'MANHUNT_VERSION=%s\n' "$SELECTED_VERSION" >> "$GITHUB_ENV"
+      - name: Set up Java 25
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-provider: basic
+      - name: Test release helpers
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Build and test the mod
+        run: ./gradlew --no-daemon clean build runGametest
+      - name: Verify installable JAR
+        id: jar
+        run: python3 scripts/verify_mod_jar.py
+      - name: Upload installable JAR
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: manhunt
+          path: ${{ steps.jar.outputs.jar }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-reports
+          path: |
+            build/gametest-results.xml
+            build/gametest/logs/latest.log
+            build/reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  release:
+    needs: [version, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MANHUNT_VERSION: ${{ needs.version.outputs.version }}
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: manhunt
+          path: release
+      - name: Verify downloaded JAR
+        run: python3 scripts/verify_mod_jar.py release
+      - name: Publish JAR and changelog
+        run: python3 scripts/publish_release.py release
