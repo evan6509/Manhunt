@@ -1,0 +1,9 @@
+{
+  "id": "manhunt",
+  "name": "Manhunt",
+  "version": "${version}",
+  "description": "Fresh-world Manhunt routing for Fabric backends.",
+  "authors": ["evan6509"],
+  "dependencies": [],
+  "main": "com.evanchubbuck.manhunt.velocity.ManhuntVelocityPlugin"
+}

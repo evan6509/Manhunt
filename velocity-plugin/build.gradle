@@ -1,0 +1,36 @@
+plugins { id 'java' }
+
+group = rootProject.group
+version = rootProject.version
+base { archivesName = 'manhunt-velocity' }
+
+repositories {
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly 'com.velocitypowered:velocity-api:4.0.0'
+    annotationProcessor 'com.velocitypowered:velocity-api:4.0.0'
+    compileOnly 'com.google.code.gson:gson:2.11.0'
+    testImplementation 'com.velocitypowered:velocity-api:4.0.0'
+    testImplementation 'com.google.code.gson:gson:2.11.0'
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.mockito:mockito-core:5.15.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testRuntimeOnly 'org.slf4j:slf4j-simple:2.0.16'
+}
+
+sourceSets.main.java.srcDir('../shared/src/main/java')
+java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+test {
+    useJUnitPlatform()
+    jvmArgs '-Dnet.bytebuddy.experimental=true'
+}
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('velocity-plugin.json') { expand version: project.version }
+}
+jar { from('../LICENSE') }

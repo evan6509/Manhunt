@@ -1,0 +1,58 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.17.14'
+}
+
+def selectedVersion = providers.environmentVariable('MANHUNT_VERSION').getOrElse(project.mod_version)
+if (!(selectedVersion ==~ /(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)/)) {
+    throw new GradleException('Mod version must be a number such as 1.0.1')
+}
+version = "${selectedVersion}+mc${project.minecraft_version}"
+group = 'com.evanchubbuck.manhunt'
+base { archivesName = 'manhunt' }
+
+repositories { mavenCentral() }
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') { expand version: project.version }
+}
+
+java {
+    withSourcesJar()
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+}
+
+jar { from('LICENSE') }
+
+sourceSets {
+    main { java.srcDir 'shared/src/main/java' }
+    gametest {
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+    }
+}
+
+tasks.named('build') { dependsOn ':velocity-plugin:build' }
+
+loom {
+    mods {
+        manhunt { sourceSet sourceSets.main }
+        manhunt_tests { sourceSet sourceSets.gametest }
+    }
+    runs {
+        gametest {
+            server()
+            name 'Manhunt Game Tests'
+            source sourceSets.gametest
+            vmArg '-Dfabric-api.gametest'
+            vmArg "-Dfabric-api.gametest.report-file=${layout.buildDirectory.get()}/gametest-results.xml"
+            runDir 'build/gametest'
+        }
+    }
+}

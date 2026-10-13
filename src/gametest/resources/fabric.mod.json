@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "manhunt_tests",
+  "version": "1.0.0",
+  "name": "Manhunt Tests",
+  "environment": "*",
+  "entrypoints": {
+    "fabric-gametest": ["com.evanchubbuck.manhunt.ManhuntGameTests"]
+  },
+  "depends": {
+    "manhunt": "*",
+    "fabric-gametest-api-v1": "*"
+  }
+}
