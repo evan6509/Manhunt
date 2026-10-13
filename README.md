@@ -13,8 +13,8 @@ This mod runs on the server. Hunters can connect with unmodified Minecraft
 
 | Command | Effect | Permission |
 | --- | --- | --- |
-| `/manhunt start <player>` | Choose an online runner and give everyone else a compass. | Operator level 2 / cheats |
-| `/manhunt stop` | End the hunt and turn accessible hunting compasses back into ordinary compasses. | Operator level 2 / cheats |
+| `/manhunt start <player>` | Choose an online runner, give everyone else a compass, and disable the locator bar. | Operator level 2 / cheats |
+| `/manhunt stop` | End the hunt, restore the previous locator-bar setting, and turn accessible hunting compasses back into ordinary compasses. | Operator level 2 / cheats |
 | `/manhunt status` or `/manhunt` | Show the runner and time until the next snapshot. | Everyone |
 | `/manhunt compass` | Recover a lost compass; reuse one already carried. | Hunters |
 
@@ -43,10 +43,15 @@ Stop the current hunt before choosing a different runner.
   inventories are not scanned.
 - The hunt and last recorded location are saved with the world and survive
   server restarts; the minute timer starts again when the world loads.
+- Starting a hunt immediately disables the vanilla locator bar for everyone
+  in every dimension. It stays off during the hunt, including after a restart.
+  `/manhunt stop` restores the setting from before the hunt; if it was already
+  off, it stays off. The previous setting is saved with the hunt.
+- `/manhunt compass` has no cooldown, so hunters can request replacements
+  whenever needed.
 - A hunt continues until `/manhunt stop`. It does not change game modes,
   inventories, PvP rules, or automatically declare a winner on death or dragon
-  defeat. Existing vanilla locator-bar behavior is unchanged; disable player
-  waypoints separately if you want compasses to be the only tracking aid.
+  defeat.
 
 ## Build and verify
 

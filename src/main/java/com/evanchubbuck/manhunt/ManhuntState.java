@@ -7,6 +7,7 @@ import net.minecraft.core.UUIDUtil;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
 
@@ -16,20 +17,24 @@ import java.util.UUID;
 /** One hunt per world; only minute snapshots, never live movement, are saved. */
 final class ManhuntState extends SavedData {
     static final int UPDATE_INTERVAL_TICKS = 20 * 60;
-    static final Codec<ManhuntState> CODEC = Hunt.CODEC.optionalFieldOf("hunt")
-            .xmap(ManhuntState::new, state -> state.hunt).codec();
+    static final Codec<ManhuntState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
+            Hunt.CODEC.optionalFieldOf("hunt").forGetter(state -> state.hunt),
+            Codec.BOOL.optionalFieldOf("locator_bar_before_hunt").forGetter(state -> state.locatorBarBeforeHunt)
+    ).apply(instance, ManhuntState::new));
     private static final SavedDataType<ManhuntState> TYPE = new SavedDataType<>(
             Identifier.fromNamespaceAndPath("manhunt", "state"), ManhuntState::new, CODEC, null);
 
     private Optional<Hunt> hunt;
+    private Optional<Boolean> locatorBarBeforeHunt;
     private int ticksUntilUpdate = UPDATE_INTERVAL_TICKS;
 
     ManhuntState() {
-        this(Optional.empty());
+        this(Optional.empty(), Optional.empty());
     }
 
-    private ManhuntState(Optional<Hunt> hunt) {
+    private ManhuntState(Optional<Hunt> hunt, Optional<Boolean> locatorBarBeforeHunt) {
         this.hunt = hunt;
+        this.locatorBarBeforeHunt = hunt.isPresent() ? locatorBarBeforeHunt : Optional.empty();
     }
 
     static ManhuntState get(MinecraftServer server) {
@@ -46,14 +51,35 @@ final class ManhuntState extends SavedData {
 
     void start(ServerPlayer runner) {
         hunt = Optional.of(new Hunt(runner.getUUID(), runner.getGameProfile().name(), positionOf(runner)));
+        locatorBarBeforeHunt = Optional.empty();
+        ticksUntilUpdate = UPDATE_INTERVAL_TICKS;
+        disableLocatorBar(runner.level().getServer());
+        setDirty();
+    }
+
+    void stop(MinecraftServer server) {
+        locatorBarBeforeHunt.ifPresent(previous -> setLocatorBar(server, previous));
+        hunt = Optional.empty();
+        locatorBarBeforeHunt = Optional.empty();
         ticksUntilUpdate = UPDATE_INTERVAL_TICKS;
         setDirty();
     }
 
-    void stop() {
-        hunt = Optional.empty();
-        ticksUntilUpdate = UPDATE_INTERVAL_TICKS;
-        setDirty();
+    /** Capture once, including for saved hunts created before locator-bar control existed. */
+    void disableLocatorBar(MinecraftServer server) {
+        if (hunt.isEmpty()) return;
+        if (locatorBarBeforeHunt.isEmpty()) {
+            locatorBarBeforeHunt = Optional.of(server.getGameRules().get(GameRules.LOCATOR_BAR));
+            setDirty();
+        }
+        setLocatorBar(server, false);
+    }
+
+    private static void setLocatorBar(MinecraftServer server, boolean enabled) {
+        if (server.getGameRules().get(GameRules.LOCATOR_BAR) != enabled) {
+            // The vanilla callback immediately removes/rebuilds waypoint connections in every dimension.
+            server.getGameRules().set(GameRules.LOCATOR_BAR, enabled, server);
+        }
     }
 
     /** Returns true only at a snapshot boundary. Offline/dead runners keep the old snapshot. */

@@ -20,14 +20,15 @@ final class ManhuntService {
         }
         server.getPlayerList().broadcastSystemMessage(Component.literal(
                 "Manhunt started! " + runner.getGameProfile().name()
-                        + " is the runner. Everyone else is a hunter. Compasses update every 60 seconds."), false);
+                        + " is the runner. Everyone else is a hunter. Compasses update every 60 seconds."
+                        + " The locator bar is disabled during this hunt."), false);
         return true;
     }
 
     static boolean stop(MinecraftServer server) {
         ManhuntState state = ManhuntState.get(server);
         if (state.hunt().isEmpty()) return false;
-        state.stop();
+        state.stop(server);
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             refreshCompasses(state, player);
         }
@@ -47,6 +48,7 @@ final class ManhuntService {
             }
             return;
         }
+        state.disableLocatorBar(server);
         ServerPlayer runner = server.getPlayerList().getPlayer(active.get().runnerId());
         boolean snapshotUpdated = state.tick(runner);
         // Also apply the stored snapshot to compasses picked up or taken out of storage.
@@ -55,6 +57,10 @@ final class ManhuntService {
                 refreshCompasses(state, player);
             }
         }
+    }
+
+    static void onServerStarted(MinecraftServer server) {
+        ManhuntState.get(server).disableLocatorBar(server);
     }
 
     static void onPlayerReady(ServerPlayer player) {

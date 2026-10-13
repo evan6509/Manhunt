@@ -17,6 +17,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.ItemLore;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.gamerules.GameRules;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -79,6 +80,12 @@ public final class ManhuntGameTests {
             helper.assertValueEqual(targetOf(compass(hunter)), original, "Replacement never samples live position");
             f.command(hunter, "manhunt compass", false);
             helper.assertValueEqual(compassCount(hunter), 1, "Repeated command reuses the carried compass");
+            for (int i = 0; i < 3; i++) {
+                hunter.getInventory().clearContent();
+                helper.assertValueEqual(f.command(hunter, "manhunt compass", false), 1,
+                        "Lost compasses can be replaced immediately without a cooldown");
+                helper.assertValueEqual(targetOf(compass(hunter)), original, "Repeated replacements use the stored snapshot");
+            }
             var newcomer = f.player(); // Actual Fabric connection join event provisions this player.
             helper.assertTrue(hasCompass(newcomer), "Late join automatically receives a compass");
             helper.assertValueEqual(targetOf(compass(newcomer)), original, "Late join sees only last snapshot");
@@ -207,10 +214,100 @@ public final class ManhuntGameTests {
             helper.assertValueEqual(loaded.hunt(), savedHunt, "Save/load retains UUID, name, dimension, and coordinates");
             helper.assertTrue(loaded.isRunner(runner) && !loaded.isRunner(hunter), "Restored UUID identifies runner");
             helper.assertValueEqual(loaded.ticksUntilUpdate(), ManhuntState.UPDATE_INTERVAL_TICKS, "Loaded timer starts a new minute");
-            loaded.stop();
+            loaded.stop(f.server);
             encoded = ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, loaded).getOrThrow();
             helper.assertTrue(ManhuntState.CODEC.parse(JsonOps.INSTANCE, encoded).getOrThrow().hunt().isEmpty(),
                     "Stopped state also survives save/load");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void startImmediatelyDisablesLocatorBarAndStopRestoresIt(GameTestHelper helper) throws Exception {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            var hunter = f.player();
+            f.server.getGameRules().set(GameRules.LOCATOR_BAR, true, f.server);
+            f.command(runner, "manhunt start @s", true);
+            helper.assertFalse(f.server.getGameRules().get(GameRules.LOCATOR_BAR),
+                    "Start command immediately disables the locator bar before any further ticks");
+            for (var level : f.server.getAllLevels()) {
+                helper.assertFalse(level.getGameRules().get(GameRules.LOCATOR_BAR), "Locator bar is off in every dimension");
+            }
+            helper.assertFalse(ManhuntService.start(f.server, hunter), "A second start is rejected");
+            ManhuntService.onServerStarted(f.server);
+            ManhuntService.tick(f.server);
+            f.command(runner, "manhunt stop", true);
+            helper.assertTrue(f.server.getGameRules().get(GameRules.LOCATOR_BAR),
+                    "Stop restores the original true setting even after another start attempt or startup hook");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void alreadyDisabledLocatorBarStaysDisabledAfterStop(GameTestHelper helper) {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            f.server.getGameRules().set(GameRules.LOCATOR_BAR, false, f.server);
+            ManhuntService.start(f.server, runner);
+            ManhuntService.stop(f.server);
+            helper.assertFalse(f.server.getGameRules().get(GameRules.LOCATOR_BAR), "Stop preserves a pre-existing disabled locator bar");
+            f.server.getGameRules().set(GameRules.LOCATOR_BAR, true, f.server);
+            ManhuntService.onServerStarted(f.server);
+            ManhuntService.tick(f.server);
+            helper.assertTrue(f.server.getGameRules().get(GameRules.LOCATOR_BAR), "No active hunt leaves the locator-bar setting alone");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void savedHuntRetainsPreviousLocatorBarSetting(GameTestHelper helper) {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            for (boolean previous : new boolean[]{true, false}) {
+                f.server.getGameRules().set(GameRules.LOCATOR_BAR, previous, f.server);
+                ManhuntService.start(f.server, runner);
+                var encoded = ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, f.state).getOrThrow();
+                var loaded = ManhuntState.CODEC.parse(JsonOps.INSTANCE, encoded).getOrThrow();
+                loaded.disableLocatorBar(f.server);
+                helper.assertFalse(f.server.getGameRules().get(GameRules.LOCATOR_BAR), "Loaded hunt keeps the locator bar disabled");
+                loaded.stop(f.server);
+                helper.assertValueEqual(f.server.getGameRules().get(GameRules.LOCATOR_BAR), previous,
+                        "Loaded hunt restores its saved original setting");
+                ManhuntService.stop(f.server);
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void legacySavedHuntCapturesLocatorBarBeforeDisabling(GameTestHelper helper) {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            ManhuntService.start(f.server, runner);
+            var encoded = ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, f.state).getOrThrow();
+            encoded.getAsJsonObject().remove("locator_bar_before_hunt");
+            var loaded = ManhuntState.CODEC.parse(JsonOps.INSTANCE, encoded).getOrThrow();
+            f.server.getGameRules().set(GameRules.LOCATOR_BAR, true, f.server);
+            loaded.disableLocatorBar(f.server);
+            helper.assertFalse(f.server.getGameRules().get(GameRules.LOCATOR_BAR), "A saved hunt from the older mod disables the locator bar");
+            loaded.stop(f.server);
+            helper.assertTrue(f.server.getGameRules().get(GameRules.LOCATOR_BAR), "Legacy hunt captures and restores the original setting");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void locatorBarRemainsOffThroughoutAnActiveHunt(GameTestHelper helper) {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            f.server.getGameRules().set(GameRules.LOCATOR_BAR, true, f.server);
+            ManhuntService.start(f.server, runner);
+            f.server.getGameRules().set(GameRules.LOCATOR_BAR, true, f.server);
+            ManhuntService.tick(f.server);
+            helper.assertFalse(f.server.getGameRules().get(GameRules.LOCATOR_BAR), "Tick restores the hunt's disabled locator bar");
+            ManhuntService.stop(f.server);
+            helper.assertTrue(f.server.getGameRules().get(GameRules.LOCATOR_BAR), "Original setting is restored after enforcing the hunt setting");
         }
         helper.succeed();
     }
@@ -260,6 +357,7 @@ public final class ManhuntGameTests {
         final GameTestHelper helper;
         final MinecraftServer server;
         final ManhuntState state;
+        final boolean originalLocatorBar;
         final List<ServerPlayer> players = new ArrayList<>();
 
         Fixture(GameTestHelper helper) {
@@ -267,6 +365,7 @@ public final class ManhuntGameTests {
             server = helper.getLevel().getServer();
             state = ManhuntState.get(server);
             ManhuntService.stop(server);
+            originalLocatorBar = server.getGameRules().get(GameRules.LOCATOR_BAR);
         }
 
         ServerPlayer player() {
@@ -293,6 +392,7 @@ public final class ManhuntGameTests {
         @Override
         public void close() {
             ManhuntService.stop(server);
+            server.getGameRules().set(GameRules.LOCATOR_BAR, originalLocatorBar, server);
             for (var player : players) {
                 if (server.getPlayerList().getPlayer(player.getUUID()) != null) server.getPlayerList().remove(player);
                 player.discard();
