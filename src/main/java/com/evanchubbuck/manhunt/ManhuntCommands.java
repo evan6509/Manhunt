@@ -14,6 +14,8 @@ final class ManhuntCommands {
             "A manhunt is already running. Use /manhunt stop before starting another.");
     private static final SimpleCommandExceptionType NOT_RUNNING = error("No manhunt is running.");
     private static final SimpleCommandExceptionType RUNNER_COMPASS = error("The runner cannot request a hunting compass.");
+    private static final SimpleCommandExceptionType WAITING_FOR_WORLD = error("Waiting for the fresh world and automatic runner selection.");
+    private static final SimpleCommandExceptionType START_FAILED = error("Unable to save the new hunt. Check the server log and try again.");
 
     private ManhuntCommands() {}
 
@@ -23,8 +25,10 @@ final class ManhuntCommands {
                 .then(Commands.literal("start")
                         .requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER))
                         .then(Commands.argument("player", EntityArgument.player()).executes(context -> {
+                            if (ManhuntState.get(context.getSource().getServer()).hunt().isPresent()) throw ALREADY_RUNNING.create();
+                            if (!ManhuntNetwork.canStart(context.getSource().getServer(), null)) throw WAITING_FOR_WORLD.create();
                             if (!ManhuntService.start(context.getSource().getServer(), EntityArgument.getPlayer(context, "player"))) {
-                                throw ALREADY_RUNNING.create();
+                                throw START_FAILED.create();
                             }
                             context.getSource().sendSuccess(() -> Component.literal("Manhunt started."), true);
                             return 1;
@@ -53,7 +57,8 @@ final class ManhuntCommands {
     private static int status(CommandSourceStack source) throws CommandSyntaxException {
         var state = ManhuntState.get(source.getServer());
         if (state.hunt().isEmpty()) {
-            source.sendSuccess(() -> Component.literal("No manhunt is running. Use /manhunt start <player>."), false);
+            source.sendSuccess(() -> Component.literal(!ManhuntNetwork.canStart(source.getServer(), null)
+                    ? "Waiting for the fresh world and automatic runner selection." : "No manhunt is running. Use /manhunt start <player>."), false);
         } else {
             var hunt = state.hunt().orElseThrow();
             boolean online = source.getServer().getPlayerList().getPlayer(hunt.runnerId()) != null;

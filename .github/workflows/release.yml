@@ -67,16 +67,26 @@ jobs:
           cache-provider: basic
       - name: Test release helpers
         run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
-      - name: Build and test the mod
+      - name: Test Docker rotation controller
+        run: python3 -m unittest discover -s docker -p 'test_*.py' -v
+      - name: Validate Docker Compose configuration
+        env:
+          EULA: 'false'
+          FORWARDING_SECRET: ci-config-validation-only
+        run: docker compose config --quiet
+      - name: Build and test the mod and Velocity plugin
         run: ./gradlew --no-daemon clean build runGametest
-      - name: Verify installable JAR
-        id: jar
+      - name: Verify Fabric mod
         run: python3 scripts/verify_mod_jar.py
-      - name: Upload installable JAR
+      - name: Verify Velocity plugin
+        run: python3 scripts/verify_velocity_jar.py
+      - name: Package Fabric, Velocity, and Docker artifacts
+        run: python3 scripts/package_release.py
+      - name: Upload release artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: manhunt
-          path: ${{ steps.jar.outputs.jar }}
+          path: build/release/*
           if-no-files-found: error
           retention-days: 14
       - name: Upload test reports
@@ -88,6 +98,7 @@ jobs:
             build/gametest-results.xml
             build/gametest/logs/latest.log
             build/reports/
+            velocity-plugin/build/reports/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -111,7 +122,7 @@ jobs:
         with:
           name: manhunt
           path: release
-      - name: Verify downloaded JAR
-        run: python3 scripts/verify_mod_jar.py release
-      - name: Publish JAR and changelog
+      - name: Verify downloaded release assets
+        run: python3 scripts/verify_release_assets.py release
+      - name: Publish mod, plugin, Docker bundle, and changelog
         run: python3 scripts/publish_release.py release

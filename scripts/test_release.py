@@ -11,9 +11,13 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 
+from deployment_archive import REQUIRED_FILES, create_archive, verify_archive
+from package_release import stage
 import publish_release
 from release_version import parse_version, select_version
 from verify_mod_jar import verify
+from verify_release_assets import verify as verify_assets
+from verify_velocity_jar import verify as verify_plugin
 
 
 COMMIT = "a" * 40
@@ -74,6 +78,7 @@ class JarTests(unittest.TestCase):
                          "ManhuntService", "TrackingCompass"]:
                 archive.writestr(f"com/evanchubbuck/manhunt/{name}.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x45")
             archive.writestr("LICENSE", "MIT License test fixture")
+            archive.writestr("com/evanchubbuck/manhunt/network/NetworkFiles.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x45")
             if include_tests:
                 archive.writestr("com/evanchubbuck/manhunt/ManhuntGameTests.class", b"test fixture")
         return jar
@@ -103,11 +108,170 @@ class JarTests(unittest.TestCase):
                 verify(folder, "1.0.1")
 
 
+class VelocityJarTests(unittest.TestCase):
+    def fixture(self, folder, embedded="1.0.1+mc26.2", extra=None, main=None, missing_shared=False):
+        jar = Path(folder) / "manhunt-velocity-1.0.1+mc26.2.jar"
+        metadata = dict(id="manhunt", version=embedded,
+                        main=main or "com.evanchubbuck.manhunt.velocity.ManhuntVelocityPlugin")
+        with ZipFile(jar, "w") as archive:
+            archive.writestr("velocity-plugin.json", json.dumps(metadata))
+            archive.writestr("LICENSE", "MIT License test fixture")
+            for name in ["velocity/ManhuntVelocityPlugin", "network/NetworkFiles"]:
+                if missing_shared and name == "network/NetworkFiles":
+                    continue
+                archive.writestr(f"com/evanchubbuck/manhunt/{name}.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x45")
+            if extra:
+                archive.writestr(*extra)
+        return jar
+
+    def test_velocity_metadata_and_shared_class(self):
+        with tempfile.TemporaryDirectory() as folder:
+            jar = self.fixture(folder)
+            (Path(folder) / "manhunt-velocity-1.0.1+mc26.2-sources.jar").write_bytes(b"sources")
+            self.assertEqual(verify_plugin(folder, "1.0.1")[0], jar)
+
+    def test_wrong_version_or_entrypoint_is_rejected(self):
+        for options, message in [({"embedded": "1.0.0+mc26.2"}, "embedded version"),
+                                 ({"main": "wrong.Main"}, "entrypoint")]:
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as folder:
+                self.fixture(folder, **options)
+                with self.assertRaisesRegex(ValueError, message):
+                    verify_plugin(folder, "1.0.1")
+
+    def test_dependencies_tests_and_old_bytecode_are_rejected(self):
+        extras = [(("lib/dependency.jar", b"jar"), "Bundled dependency"),
+                  (("com/velocitypowered/api/ProxyServer.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x45"), "Shaded dependency"),
+                  (("com/evanchubbuck/manhunt/PluginTests.class", b"test"), "test classes"),
+                  (("com/evanchubbuck/manhunt/PluginTest.class", b"test"), "test classes"),
+                  (("com/evanchubbuck/manhunt/Old.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x41"), "Java 25")]
+        for extra, message in extras:
+            with self.subTest(extra=extra[0]), tempfile.TemporaryDirectory() as folder:
+                self.fixture(folder, extra=extra)
+                with self.assertRaisesRegex(ValueError, message):
+                    verify_plugin(folder, "1.0.1")
+
+    def test_missing_shared_contract_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.fixture(folder, missing_shared=True)
+            with self.assertRaisesRegex(ValueError, "Missing Velocity plugin files"):
+                verify_plugin(folder, "1.0.1")
+
+    def test_missing_or_multiple_velocity_plugins(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(ValueError, "Expected one Velocity plugin"):
+                verify_plugin(folder, "1.0.1")
+            jar = self.fixture(folder)
+            (Path(folder) / "unexpected.jar").write_bytes(jar.read_bytes())
+            with self.assertRaisesRegex(ValueError, "Expected one Velocity plugin"):
+                verify_plugin(folder, "1.0.1")
+
+
+class DeploymentArchiveTests(unittest.TestCase):
+    def fixture(self, folder):
+        root = Path(folder)
+        for name in REQUIRED_FILES:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("EULA=false\n" if name == ".env.example" else "deployment source fixture\n")
+        return root
+
+    def test_version_and_executable_permissions_without_runtime_data(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.fixture(folder)
+            for name in [".env", "docker/state.json", "docker/private.json", "world/level.dat",
+                         "velocity-plugin/build/libs/private.jar", ".git/config"]:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("private runtime fixture")
+            source = root / "src/main/java/com/evanchubbuck/manhunt/Extra.java"
+            source.write_text("package test;")
+            archive = create_archive(root, root / "deployment.zip", "1.0.1")
+            with ZipFile(archive) as zipped:
+                self.assertEqual(zipped.read("RELEASE_VERSION"), b"1.0.1\n")
+                self.assertIn(b"MANHUNT_VERSION=1.0.1", zipped.read(".env.example"))
+                self.assertIn(source.relative_to(root).as_posix(), zipped.namelist())
+                for name in [".env", "docker/state.json", "docker/private.json", "world/level.dat",
+                             "velocity-plugin/build/libs/private.jar", ".git/config"]:
+                    self.assertNotIn(name, zipped.namelist())
+                self.assertEqual((zipped.getinfo("gradlew").external_attr >> 16) & 0o777, 0o755)
+                self.assertEqual((zipped.getinfo("docker/entrypoint.sh").external_attr >> 16) & 0o777, 0o755)
+
+    def test_missing_sources_symlinks_and_wrong_version_are_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.fixture(folder)
+            (root / "gradlew").unlink()
+            with self.assertRaisesRegex(ValueError, "Missing Docker deployment sources"):
+                create_archive(root, root / "deployment.zip", "1.0.1")
+            (root / "gradlew").symlink_to(root / "README.md")
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                create_archive(root, root / "deployment.zip", "1.0.1")
+            (root / "gradlew").unlink()
+            (root / "gradlew").write_text("wrapper")
+            archive = create_archive(root, root / "deployment.zip", "1.0.1")
+            with self.assertRaisesRegex(ValueError, "version does not match"):
+                verify_archive(archive, "1.0.2")
+
+    def test_unexpected_runtime_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = self.fixture(folder)
+            archive = create_archive(root, root / "deployment.zip", "1.0.1")
+            with ZipFile(archive, "a") as zipped:
+                zipped.writestr(".env", "private fixture")
+            with self.assertRaisesRegex(ValueError, "Unexpected file"):
+                verify_archive(archive, "1.0.1")
+
+
+class ReleaseAssetsTests(unittest.TestCase):
+    def fixture(self, folder):
+        root = DeploymentArchiveTests().fixture(folder)
+        mod = JarTests().fixture(folder)
+        plugin = VelocityJarTests().fixture(folder)
+        archive = root / "manhunt-docker-1.0.1+mc26.2.zip"
+        create_archive(root, archive, "1.0.1")
+        assets = root / "assets"
+        assets.mkdir()
+        for path in (mod, plugin, archive):
+            path.rename(assets / path.name)
+        return root, assets
+
+    def test_combined_artifacts_and_missing_or_extra_plugin(self):
+        with tempfile.TemporaryDirectory() as folder:
+            _, assets = self.fixture(folder)
+            self.assertEqual(len(verify_assets(assets, "1.0.1")[0]), 3)
+            plugin = assets / "manhunt-velocity-1.0.1+mc26.2.jar"
+            plugin.rename(assets / "unexpected.jar")
+            with self.assertRaisesRegex(ValueError, "exact release assets"):
+                verify_assets(assets, "1.0.1")
+            (assets / "unexpected.jar").unlink()
+            with self.assertRaisesRegex(ValueError, "exact release assets"):
+                verify_assets(assets, "1.0.1")
+
+    def test_staging_verifies_both_jars_and_deployment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, assets = self.fixture(folder)
+            (root / "build/libs").mkdir(parents=True)
+            (root / "velocity-plugin/build/libs").mkdir(parents=True)
+            for path in list(assets.glob("*.jar")):
+                directory = "velocity-plugin/build/libs" if "velocity" in path.name else "build/libs"
+                path.rename(root / directory / path.name)
+            output = root / "build/release"
+            self.assertEqual(len(stage(root, output, "1.0.1")), 3)
+            self.assertEqual(len(verify_assets(output, "1.0.1")[0]), 3)
+            with self.assertRaisesRegex(ValueError, "must be empty"):
+                stage(root, output, "1.0.1")
+
+
 class PublicationTests(unittest.TestCase):
-    def run_publication(self, folder, existing=None, corrupt=False, api_failure=False, releases=(), version="1.0.0"):
+    def run_publication(self, folder, existing=None, corrupt=False, api_failure=False, releases=(),
+                        version="1.0.0", unexpected_download=False):
         directory = Path(folder)
         jar = directory / f"manhunt-{version}+mc26.2.jar"
         jar.write_bytes(b"verified installable jar fixture")
+        plugin = directory / f"manhunt-velocity-{version}+mc26.2.jar"
+        plugin.write_bytes(b"verified velocity plugin fixture")
+        deployment = directory / f"manhunt-docker-{version}+mc26.2.zip"
+        deployment.write_bytes(b"verified docker deployment fixture")
+        build_assets = [jar, plugin, deployment]
         metadata = dict(version=f"{version}+mc26.2", depends={"minecraft": "26.2", "fabricloader": ">=0.19.3",
                                                       "fabric-api": ">=0.154.2", "java": ">=25"})
         calls = []
@@ -122,10 +286,13 @@ class PublicationTests(unittest.TestCase):
                 return json.dumps(dict(body="## What's Changed\n- Test change in #1"))
             if args[:2] == ("release", "download"):
                 downloaded = Path(args[args.index("--dir") + 1])
-                for asset in [jar, directory / "CHANGELOG.md", directory / "SHA256SUMS"]:
+                for asset in [*build_assets, directory / "CHANGELOG.md", directory / "SHA256SUMS"]:
                     (downloaded / asset.name).write_bytes(asset.read_bytes())
                 if corrupt:
-                    (downloaded / jar.name).write_bytes(b"corrupted download")
+                    asset = build_assets[corrupt - 1] if isinstance(corrupt, int) else jar
+                    (downloaded / asset.name).write_bytes(b"corrupted download")
+                if unexpected_download:
+                    (downloaded / "unexpected.jar").write_bytes(b"unexpected download")
             if args[:2] == ("release", "view"):
                 return json.dumps(dict(url="https://example.invalid/release"))
             return ""
@@ -133,7 +300,7 @@ class PublicationTests(unittest.TestCase):
         env = dict(MANHUNT_VERSION=version, RELEASE_TAG=f"v{version}",
                    GITHUB_REPOSITORY="example/manhunt", GITHUB_SHA=COMMIT)
         with patch.dict(os.environ, env, clear=True), patch("sys.argv", ["publish_release.py", folder]), \
-                patch.object(publish_release, "verify", return_value=(jar, metadata)), \
+                patch.object(publish_release, "verify", return_value=(build_assets, metadata)), \
                 patch.object(publish_release, "commit_notes", return_value="- Direct commit change"), \
                 patch.object(publish_release, "tag_commit", return_value=COMMIT if existing and not existing["draft"] else None), \
                 patch.object(publish_release, "gh", side_effect=fake_gh), contextlib.redirect_stdout(io.StringIO()):
@@ -156,11 +323,24 @@ class PublicationTests(unittest.TestCase):
             self.assertIn("Test change in #1", (Path(folder) / "CHANGELOG.md").read_text())
             self.assertIn("Direct commit change", (Path(folder) / "CHANGELOG.md").read_text())
             self.assertIn("SHA256SUMS", " ".join(creation))
+            self.assertIn("manhunt-velocity-1.0.0+mc26.2.jar", " ".join(creation))
+            self.assertIn("manhunt-docker-1.0.0+mc26.2.zip", " ".join(creation))
+            checksums = (Path(folder) / "SHA256SUMS").read_text()
+            self.assertEqual(len(checksums.splitlines()), 4)
+            self.assertIn("manhunt-velocity", checksums)
+            self.assertIn("manhunt-docker", checksums)
 
     def test_corrupt_download_is_not_published(self):
+        for asset in (1, 2, 3):
+            with self.subTest(asset=asset), tempfile.TemporaryDirectory() as folder:
+                with self.assertRaisesRegex(ValueError, "differs from the build"):
+                    self.run_publication(folder, corrupt=asset)
+                self.assertFalse(any("--draft=false" in call for call in self.calls))
+
+    def test_unexpected_downloaded_asset_is_not_published(self):
         with tempfile.TemporaryDirectory() as folder:
-            with self.assertRaisesRegex(ValueError, "differs from the build"):
-                self.run_publication(folder, corrupt=True)
+            with self.assertRaisesRegex(ValueError, "asset set"):
+                self.run_publication(folder, unexpected_download=True)
             self.assertFalse(any("--draft=false" in call for call in self.calls))
 
     def test_api_failure_is_not_treated_as_missing_release(self):
@@ -204,10 +384,20 @@ class PublicationTests(unittest.TestCase):
     def test_published_rerun_does_not_modify_assets(self):
         existing = release("v1.0.0", COMMIT)
         existing["assets"] = [dict(name=name, state="uploaded") for name in
-                              ["manhunt-1.0.0+mc26.2.jar", "CHANGELOG.md", "SHA256SUMS"]]
+                              ["manhunt-1.0.0+mc26.2.jar", "manhunt-velocity-1.0.0+mc26.2.jar",
+                               "manhunt-docker-1.0.0+mc26.2.zip", "CHANGELOG.md", "SHA256SUMS"]]
         with tempfile.TemporaryDirectory() as folder:
             calls = self.run_publication(folder, existing=existing, releases=[release("v1.0.1")])
             self.assertFalse(any(call[0] == "release" for call in calls))
+
+    def test_published_release_missing_plugin_is_left_unchanged(self):
+        existing = release("v1.0.0", COMMIT)
+        existing["assets"] = [dict(name=name, state="uploaded") for name in
+                              ["manhunt-1.0.0+mc26.2.jar", "CHANGELOG.md", "SHA256SUMS"]]
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(ValueError, "missing expected assets"):
+                self.run_publication(folder, existing=existing)
+            self.assertFalse(any(call[0] == "release" for call in self.calls))
 
     def test_conflicting_tag_or_mutable_draft_target_is_rejected(self):
         with self.assertRaises(ValueError):

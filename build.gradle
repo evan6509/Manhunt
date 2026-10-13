@@ -31,11 +31,14 @@ java {
 jar { from('LICENSE') }
 
 sourceSets {
+    main { java.srcDir 'shared/src/main/java' }
     gametest {
         compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
         runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
     }
 }
+
+tasks.named('build') { dependsOn ':velocity-plugin:build' }
 
 loom {
     mods {

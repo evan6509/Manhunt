@@ -1,0 +1,51 @@
+name: manhunt
+
+x-manhunt-image: &manhunt-image
+  image: manhunt:${MANHUNT_VERSION:-1.0.0}
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      MANHUNT_VERSION: ${MANHUNT_VERSION:-1.0.0}
+
+services:
+  proxy:
+    <<: *manhunt-image
+    environment:
+      MODE: proxy
+      EULA: ${EULA:?Set EULA=true in .env after accepting the Minecraft EULA}
+      FORWARDING_SECRET: ${FORWARDING_SECRET:?Set a unique forwarding secret in .env}
+      MC_MEMORY: ${PROXY_MEMORY:-512M}
+    ports:
+      - "${VELOCITY_PORT:-25578}:25578"
+    volumes:
+      - manhunt-data:/manhunt
+    restart: unless-stopped
+    stop_grace_period: 45s
+  server-a:
+    <<: *manhunt-image
+    environment:
+      MODE: server
+      SERVER_ID: a
+      EULA: ${EULA:?Set EULA=true in .env after accepting the Minecraft EULA}
+      FORWARDING_SECRET: ${FORWARDING_SECRET:?Set a unique forwarding secret in .env}
+      MC_MEMORY: ${BACKEND_MEMORY:-3G}
+    volumes:
+      - manhunt-data:/manhunt
+    restart: unless-stopped
+    stop_grace_period: 45s
+  server-b:
+    <<: *manhunt-image
+    environment:
+      MODE: server
+      SERVER_ID: b
+      EULA: ${EULA:?Set EULA=true in .env after accepting the Minecraft EULA}
+      FORWARDING_SECRET: ${FORWARDING_SECRET:?Set a unique forwarding secret in .env}
+      MC_MEMORY: ${BACKEND_MEMORY:-3G}
+    volumes:
+      - manhunt-data:/manhunt
+    restart: unless-stopped
+    stop_grace_period: 45s
+
+volumes:
+  manhunt-data:

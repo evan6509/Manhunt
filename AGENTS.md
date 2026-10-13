@@ -1,6 +1,8 @@
 # Repository workflow
 
 - Minecraft target: Fabric 26.2, Java 25.
+- Optional network deployment: Velocity 4.0, two Fabric backends and Docker.
+  Keep standalone mode available with the network bridge disabled by default.
 - Do routine work, edits, and commits on `codex/development`.
 - `main` is the integration and release branch. Never commit changes directly
   to `main`. Use a reviewed pull request from `codex/development` into `main`.
@@ -28,6 +30,15 @@
 - Keep test/build/JAR evidence separate from connected-player gameplay and
   remote Actions/release evidence. Never claim a release was published unless
   GitHub confirms it and its assets.
+- Network changes require `:velocity-plugin:test` (included in `build`) and
+  `python3 -m unittest discover -s docker -p 'test_*.py' -v`. Test incomplete
+  transfers, generation matching, checkpoint recovery, and runner selection.
+- Never archive/reset a backend until every transfer succeeds, the source is
+  empty, and the backend acknowledges the exact completed world/run IDs.
+  Ordinary crashes preserve worlds. Archive only the complete `world/` after
+  the JVM exits; retain operator/configuration files and proxy history.
+- The next runner excludes the preceding runner and prefers players with fewer
+  runner turns, choosing randomly among ties. Auto-start waits for two players.
 
 # Release automation
 
@@ -37,5 +48,6 @@
   version must match the JAR filename and `fabric.mod.json`.
 - Serialize version selection through publication. Retrying the same commit
   must reuse its release rather than replace a published release's assets.
-- Include the installable JAR, `CHANGELOG.md`, and `SHA256SUMS`. Changelogs must
+- Include the Fabric JAR, Velocity plugin, Docker source ZIP, `CHANGELOG.md`,
+  and `SHA256SUMS`. Changelogs must
   include direct commits as well as GitHub-generated PR notes.

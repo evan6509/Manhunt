@@ -11,7 +11,7 @@ import sys
 import tempfile
 
 from release_version import parse_version, stable_releases, tag_commit
-from verify_mod_jar import verify
+from verify_release_assets import verify
 
 
 def gh(*args):
@@ -54,7 +54,8 @@ def commit_notes(previous, commit, repository):
     return "\n".join(bullets)
 
 
-def write_changelog(path, version, jar, metadata, notes, repository, commit, commits):
+def write_changelog(path, version, assets, metadata, notes, repository, commit, commits):
+    jar, plugin, deployment = assets
     depends = metadata["depends"]
     requirements = ", ".join(f"{name} `{depends[key]}`" for key, name in (
         ("minecraft", "Minecraft"), ("fabricloader", "Fabric Loader"),
@@ -64,11 +65,22 @@ def write_changelog(path, version, jar, metadata, notes, repository, commit, com
         f"## Commits\n\n{commits}\n\n"
         f"## Install\n\nDownload `{jar.name}` and put it in the server's `mods` folder.\n\n"
         f"Requirements: {requirements}.\n\n"
+        f"For automatic fresh worlds, use `{deployment.name}`. Extract it, copy `.env.example` "
+        f"to `.env`, accept the Minecraft EULA and set a private forwarding secret there, "
+        f"then run `docker compose up -d --build`. "
+        f"The archive selects build version `{version}` and includes `docs/DOCKER.md`.\n\n"
+        f"The standalone Velocity plugin is `{plugin.name}` for the proxy's `plugins` folder. "
+        f"It requires Java 25 and the matching Fabric mod plus Docker rotation controller. "
+        f"Use the bundled Docker setup for the complete network.\n\n"
         f"Source: [{commit[:7]}](https://github.com/{repository}/commit/{commit}).\n",
         encoding="utf-8")
 
 
 def verify_downloads(assets, downloaded):
+    expected = {asset.name for asset in assets}
+    actual = {path.name for path in Path(downloaded).iterdir()}
+    if actual != expected:
+        raise ValueError(f"Downloaded release asset set does not match the build: {sorted(actual)}")
     for asset in assets:
         if (Path(downloaded) / asset.name).read_bytes() != asset.read_bytes():
             raise ValueError(f"Downloaded release asset differs from the build: {asset.name}")
@@ -82,7 +94,7 @@ def main():
         raise ValueError("Release tag does not match the selected mod version")
     repository = os.environ["GITHUB_REPOSITORY"]
     commit = os.environ["GITHUB_SHA"]
-    jar, metadata = verify(directory, version)
+    build_assets, metadata = verify(directory, version)
     pages = json.loads(gh("api", f"repos/{repository}/releases?per_page=100", "--paginate", "--slurp"))
     releases = [release for page in pages for release in page]
     matches = [release for release in releases if release["tag_name"] == tag]
@@ -91,7 +103,7 @@ def main():
     existing = matches[0] if matches else None
     validate_target(existing, tag_commit(tag), commit)
     if existing is not None and not existing["draft"]:
-        required = {jar.name, "CHANGELOG.md", "SHA256SUMS"}
+        required = {asset.name for asset in build_assets} | {"CHANGELOG.md", "SHA256SUMS"}
         uploaded = {asset["name"] for asset in existing["assets"] if asset["state"] == "uploaded"}
         if not required <= uploaded:
             raise ValueError("Published release is missing expected assets; leaving it unchanged")
@@ -105,13 +117,13 @@ def main():
         args += ["-f", f"previous_tag_name={previous}"]
     notes = json.loads(gh(*args))["body"]
     changelog = directory / "CHANGELOG.md"
-    write_changelog(changelog, version, jar, metadata, notes, repository, commit,
+    write_changelog(changelog, version, build_assets, metadata, notes, repository, commit,
                     commit_notes(previous, commit, repository))
     checksums = directory / "SHA256SUMS"
     checksums.write_text("".join(
         f"{hashlib.sha256(asset.read_bytes()).hexdigest()}  {asset.name}\n"
-        for asset in [jar, changelog]), encoding="utf-8")
-    assets = [jar, changelog, checksums]
+        for asset in [*build_assets, changelog]), encoding="utf-8")
+    assets = [*build_assets, changelog, checksums]
     title = f"Manhunt {version} (Minecraft {metadata['depends']['minecraft']})"
     if existing is None:
         gh("release", "create", tag, *(str(asset) for asset in assets), "--repo", repository,
@@ -134,7 +146,8 @@ def main():
     print(f"Published: {url}")
     if "GITHUB_STEP_SUMMARY" in os.environ:
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-            summary.write(f"Published [{tag}]({url}) with the installable JAR, changelog, and checksums.\n")
+            summary.write(f"Published [{tag}]({url}) with the Fabric mod, Velocity plugin, "
+                          "Docker source bundle, changelog, and checksums.\n")
 
 
 if __name__ == "__main__":

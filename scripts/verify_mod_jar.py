@@ -11,13 +11,14 @@ from zipfile import ZipFile
 from release_version import parse_version, properties
 
 
-def verify(directory, version=None):
+def verify(directory, version=None, companion_jars=()):
     props = properties()
     version = version or os.environ.get("MANHUNT_VERSION", props["mod_version"])
     parse_version(version)
     full_version = f"{version}+mc{props['minecraft_version']}"
     filename = f"manhunt-{full_version}.jar"
-    jars = [path for path in Path(directory).glob("*.jar") if not path.name.endswith("-sources.jar")]
+    jars = [path for path in Path(directory).glob("*.jar")
+            if not path.name.endswith("-sources.jar") and path.name not in companion_jars]
     if len(jars) != 1 or jars[0].name != filename:
         raise ValueError(f"Expected one installable JAR named {filename}; found {jars}")
     with ZipFile(jars[0]) as jar:
@@ -35,11 +36,12 @@ def verify(directory, version=None):
                     "com/evanchubbuck/manhunt/ManhuntState.class",
                     "com/evanchubbuck/manhunt/ManhuntState$Hunt.class",
                     "com/evanchubbuck/manhunt/ManhuntService.class",
-                    "com/evanchubbuck/manhunt/TrackingCompass.class"}
+                    "com/evanchubbuck/manhunt/TrackingCompass.class",
+                    "com/evanchubbuck/manhunt/network/NetworkFiles.class"}
         names = set(jar.namelist())
         if missing := expected - names:
             raise ValueError(f"Missing release files: {sorted(missing)}")
-        if any("gametest" in name.lower() or name.endswith("Tests.class") for name in names):
+        if any("gametest" in name.lower() or name.endswith(("Test.class", "Tests.class")) for name in names):
             raise ValueError("Test classes are included in the installable JAR")
         for name in names:
             if name.endswith(".class"):

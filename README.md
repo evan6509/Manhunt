@@ -1,7 +1,9 @@
 # Manhunt for Fabric 26.2
 
 One player is the runner. Everyone else is a hunter with a compass pointing to
-the runner's last recorded location. Download the mod JAR from
+the runner's last recorded location. The optional Docker/Velocity setup moves
+everyone to a fresh world between hunts and automatically chooses a different
+runner for the next round. Download the mod JAR from
 [GitHub Releases](https://github.com/evan6509/Manhunt/releases) and install it with
 Fabric API **0.154.2+26.2 or newer for 26.2** in the server's `mods` folder,
 using Fabric Loader **0.19.3 or newer** and **Java 25**.
@@ -14,7 +16,7 @@ This mod runs on the server. Hunters can connect with unmodified Minecraft
 | Command | Effect | Permission |
 | --- | --- | --- |
 | `/manhunt start <player>` | Choose an online runner, give everyone else a compass, and disable the locator bar. | Operator level 2 / cheats |
-| `/manhunt stop` | End the hunt, restore the previous locator-bar setting, and turn accessible hunting compasses back into ordinary compasses. | Operator level 2 / cheats |
+| `/manhunt stop` | End the hunt and restore its settings; in the Docker network, move everyone into the next fresh world. | Operator level 2 / cheats |
 | `/manhunt status` or `/manhunt` | Show the runner and time until the next snapshot. | Everyone |
 | `/manhunt compass` | Recover a lost compass; reuse one already carried. | Hunters |
 
@@ -49,9 +51,45 @@ Stop the current hunt before choosing a different runner.
   off, it stays off. The previous setting is saved with the hunt.
 - `/manhunt compass` has no cooldown, so hunters can request replacements
   whenever needed.
-- A hunt continues until `/manhunt stop`. It does not change game modes,
-  inventories, PvP rules, or automatically declare a winner on death or dragon
-  defeat.
+- Runner death gives the hunters a win. An Ender Dragon defeat credited to the
+  runner gives the runner a win. Hunter deaths do not end the hunt.
+  `/manhunt stop` also ends it manually.
+- Standalone hunts end in the current world. The Docker network holds players
+  in spectator mode while transferring them to the next fresh world, where
+  they begin with fresh inventories and world progress.
+
+## Fresh worlds through Velocity and Docker
+
+The deployment includes a Velocity 4.0 proxy and two Fabric 26.2 backends.
+Players connect to the proxy on port **25578**. Start the first hunt with
+`/manhunt start <player>`. After a win or manual stop:
+
+1. Velocity reserves the other ready, empty backend and transfers everyone.
+2. After the transfers succeed and the source is empty, its Docker controller
+   stops that server and archives the complete old world.
+3. The backend starts again with a new world and random seed, ready for the
+   following transfer.
+4. The next hunt starts automatically once at least two players have arrived.
+   The preceding runner is excluded. Players with fewer runner turns get
+   priority, with random selection among ties.
+
+Selection history and pending transfers survive proxy restarts. An ordinary
+backend crash restarts the same world; only an acknowledged completed run can
+authorize an archive/reset. Invalid, stale, occupied, or failed transfers do
+not authorize resetting the source. Finished worlds cannot start another hunt.
+If no fresh backend is available, the group waits rather than reusing a world.
+
+Follow [Docker setup and launch instructions](docs/DOCKER.md). This setup is
+separate from Linked Hardcore and uses its own volume and host port. Old worlds
+remain in the backend's `archive/` directory for recovery.
+
+For a manual installation, put the Velocity plugin in the proxy's `plugins/`
+directory, install the Fabric mod and FabricProxy-Lite on every backend, and
+configure the shared-volume status paths as described in the Docker guide.
+The bridge defaults to disabled for standalone installations. Its generated
+`config/manhunt/network.json` controls `enabled`, `serverId`, and
+`controlDirectory`. Modern forwarding uses an authenticated proxy and a shared
+secret; backend ports stay private.
 
 ## Build and verify
 
@@ -61,7 +99,8 @@ Use a JDK 25 installation, then run:
 ./gradlew --no-daemon build runGametest
 ```
 
-The installable mod is `build/libs/manhunt-1.0.0+mc26.2.jar`; the `-sources.jar`
+The installable mod is `build/libs/manhunt-1.0.0+mc26.2.jar`; the Velocity plugin
+is `velocity-plugin/build/libs/manhunt-velocity-1.0.0+mc26.2.jar`. The `-sources.jar`
 is source code, not a second mod to install. Tests are in a separate source set
 and are excluded from the installable JAR. The GameTest report is written to
 `build/gametest-results.xml`.
@@ -96,7 +135,8 @@ raise `mod_version` in `gradle.properties` to begin a larger version, such as
 `2.0.0`. Retries reuse the release for the same commit. Pending `main` runs are
 queued so version selection and publication do not overlap.
 
-Each release contains the installable JAR, `CHANGELOG.md`, and `SHA256SUMS`.
+Each release contains the Fabric JAR, Velocity plugin JAR, Docker source ZIP,
+`CHANGELOG.md`, and `SHA256SUMS`.
 The release description includes GitHub-generated PR notes, linked commits
 since the previous release, and installation requirements. Assets are staged
 in a draft and downloaded for verification before publication.
