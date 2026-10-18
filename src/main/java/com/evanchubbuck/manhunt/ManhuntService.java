@@ -47,14 +47,22 @@ final class ManhuntService {
         ManhuntState state = ManhuntState.get(server);
         if (state.hunt().isEmpty()) return false;
         String runnerName = state.hunt().orElseThrow().runnerName();
-        if (ManhuntNetwork.enabled(server)) state.complete(server, outcome);
+        boolean linkedTransfer = LinkedHardcoreCompat.installed()
+                && (outcome.equals("runner_died") || outcome.equals("linked_transfer"));
+        if (ManhuntNetwork.enabled(server) || linkedTransfer) state.complete(server, outcome);
         else state.stop(server);
+        if (linkedTransfer) {
+            state.awaitLinkedTransfer();
+            server.overworld().getDataStorage().saveAndJoin();
+            LinkedHardcoreCompat.holdPlayers(server);
+        }
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             refreshCompasses(state, player);
         }
         String message = switch (outcome) {
             case "runner_died" -> "The hunters win! " + runnerName + " died.";
             case "runner_won" -> runnerName + " wins! The runner defeated the Ender Dragon.";
+            case "linked_transfer" -> "Manhunt ended. Linked Hardcore is moving everyone to a fresh world.";
             default -> "Manhunt stopped.";
         };
         server.getPlayerList().broadcastSystemMessage(Component.literal(message), false);
@@ -79,6 +87,7 @@ final class ManhuntService {
     }
 
     static void tick(MinecraftServer server) {
+        LinkedHardcoreCompat.tick(server);
         ManhuntNetwork.tick(server);
         ManhuntState state = ManhuntState.get(server);
         var active = state.hunt();
@@ -112,9 +121,14 @@ final class ManhuntService {
     static void onServerStarted(MinecraftServer server) {
         ManhuntState.get(server).disableLocatorBar(server);
         ManhuntNetwork.onServerStarted(server);
+        LinkedHardcoreCompat.holdPlayers(server);
     }
 
     static void onPlayerReady(ServerPlayer player) {
+        if (LinkedHardcoreCompat.waiting(player.level().getServer())) {
+            LinkedHardcoreCompat.holdPlayer(player);
+            return;
+        }
         ManhuntNetwork.onPlayerReady(player.level().getServer());
         ManhuntState state = ManhuntState.get(player.level().getServer());
         refreshCompasses(state, player);

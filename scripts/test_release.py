@@ -71,13 +71,18 @@ class VersionTests(unittest.TestCase):
 class JarTests(unittest.TestCase):
     def fixture(self, folder, embedded="1.0.1+mc26.2", include_tests=False):
         jar = Path(folder) / "manhunt-1.0.1+mc26.2.jar"
-        metadata = dict(id="manhunt", version=embedded, depends={"minecraft": "26.2", "java": ">=25"})
+        metadata = dict(id="manhunt", version=embedded, depends={"minecraft": "26.2", "java": ">=25"},
+                        mixins=["manhunt.mixins.json"])
         with ZipFile(jar, "w") as archive:
             archive.writestr("fabric.mod.json", json.dumps(metadata))
             for name in ["ManhuntMod", "ManhuntCommands", "ManhuntState", "ManhuntState$Hunt",
-                         "ManhuntService", "TrackingCompass"]:
+                         "ManhuntService", "TrackingCompass", "LinkedHardcoreCompat", "ManhuntMixinPlugin",
+                         "mixin/LinkedHardcoreDeathMixin", "mixin/LinkedHardcoreTransferMixin"]:
                 archive.writestr(f"com/evanchubbuck/manhunt/{name}.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x45")
             archive.writestr("LICENSE", "MIT License test fixture")
+            archive.writestr("manhunt.mixins.json", json.dumps(dict(
+                plugin="com.evanchubbuck.manhunt.ManhuntMixinPlugin", mixins=[], required=True,
+                injectors={"defaultRequire": 1})))
             archive.writestr("com/evanchubbuck/manhunt/network/NetworkFiles.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x45")
             if include_tests:
                 archive.writestr("com/evanchubbuck/manhunt/ManhuntGameTests.class", b"test fixture")
@@ -105,6 +110,23 @@ class JarTests(unittest.TestCase):
             jar = self.fixture(folder)
             (Path(folder) / "unexpected.jar").write_bytes(jar.read_bytes())
             with self.assertRaises(ValueError):
+                verify(folder, "1.0.1")
+    def test_missing_integration_and_bundled_companion_are_rejected(self):
+        for omitted in ["manhunt.mixins.json", "com/evanchubbuck/manhunt/mixin/LinkedHardcoreDeathMixin.class"]:
+            with self.subTest(omitted=omitted), tempfile.TemporaryDirectory() as folder:
+                jar = self.fixture(folder)
+                with ZipFile(jar) as archive:
+                    entries = {name: archive.read(name) for name in archive.namelist() if name != omitted}
+                with ZipFile(jar, "w") as archive:
+                    for name, data in entries.items():
+                        archive.writestr(name, data)
+                with self.assertRaisesRegex(ValueError, "Missing release files"):
+                    verify(folder, "1.0.1")
+        with tempfile.TemporaryDirectory() as folder:
+            jar = self.fixture(folder)
+            with ZipFile(jar, "a") as archive:
+                archive.writestr("META-INF/jars/linkedhardcore.jar", b"companion")
+            with self.assertRaisesRegex(ValueError, "must not be bundled"):
                 verify(folder, "1.0.1")
 
 

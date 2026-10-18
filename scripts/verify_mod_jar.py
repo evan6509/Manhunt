@@ -31,16 +31,31 @@ def verify(directory, version=None, companion_jars=()):
             raise ValueError("JAR Minecraft dependency does not match this build")
         if metadata["depends"]["java"] != ">=25":
             raise ValueError("JAR must require Java 25")
+        if metadata.get("mixins") != ["manhunt.mixins.json"]:
+            raise ValueError("JAR must register the optional Linked Hardcore mixins")
         expected = {"LICENSE", "com/evanchubbuck/manhunt/ManhuntMod.class",
                     "com/evanchubbuck/manhunt/ManhuntCommands.class",
                     "com/evanchubbuck/manhunt/ManhuntState.class",
                     "com/evanchubbuck/manhunt/ManhuntState$Hunt.class",
                     "com/evanchubbuck/manhunt/ManhuntService.class",
                     "com/evanchubbuck/manhunt/TrackingCompass.class",
-                    "com/evanchubbuck/manhunt/network/NetworkFiles.class"}
+                    "com/evanchubbuck/manhunt/network/NetworkFiles.class",
+                    "manhunt.mixins.json",
+                    "com/evanchubbuck/manhunt/LinkedHardcoreCompat.class",
+                    "com/evanchubbuck/manhunt/ManhuntMixinPlugin.class",
+                    "com/evanchubbuck/manhunt/mixin/LinkedHardcoreDeathMixin.class",
+                    "com/evanchubbuck/manhunt/mixin/LinkedHardcoreTransferMixin.class"}
         names = set(jar.namelist())
         if missing := expected - names:
             raise ValueError(f"Missing release files: {sorted(missing)}")
+        mixins = json.loads(jar.read("manhunt.mixins.json"))
+        if (mixins.get("plugin") != "com.evanchubbuck.manhunt.ManhuntMixinPlugin"
+                or mixins.get("mixins") != [] or mixins.get("required") is not True
+                or mixins.get("injectors", {}).get("defaultRequire") != 1):
+            raise ValueError("Optional companion mixins must be gated and require their injection points")
+        if "linkedhardcore" in metadata.get("depends", {}) or any(
+                name.startswith("dev/linkedhardcore/") or name.endswith(".jar") for name in names):
+            raise ValueError("Linked Hardcore must remain optional and must not be bundled")
         if any("gametest" in name.lower() or name.endswith(("Test.class", "Tests.class")) for name in names):
             raise ValueError("Test classes are included in the installable JAR")
         for name in names:

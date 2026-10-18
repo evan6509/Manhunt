@@ -5,7 +5,7 @@
   "name": "Manhunt Tests",
   "environment": "*",
   "entrypoints": {
-    "fabric-gametest": ["com.evanchubbuck.manhunt.ManhuntGameTests"]
+    "fabric-gametest": ["com.evanchubbuck.manhunt.${test_entrypoint}"]
   },
   "depends": {
     "manhunt": "*",

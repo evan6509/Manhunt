@@ -38,6 +38,23 @@ sourceSets {
     }
 }
 
+// Test against an operator-supplied companion JAR without bundling it in Manhunt.
+def linkedHardcoreJar = providers.gradleProperty('linkedHardcoreJar')
+def linkedHardcoreTests = linkedHardcoreJar.isPresent()
+if (linkedHardcoreTests) {
+    dependencies {
+        gametestRuntimeOnly files(linkedHardcoreJar.get())
+        gametestRuntimeOnly 'net.fabricmc.fabric-api:fabric-api:0.156.0+26.2'
+    }
+}
+
+tasks.named('processGametestResources') {
+    inputs.property 'linkedHardcoreTests', linkedHardcoreTests
+    filesMatching('fabric.mod.json') {
+        expand test_entrypoint: linkedHardcoreTests ? 'ManhuntLinkedHardcoreGameTests' : 'ManhuntGameTests'
+    }
+}
+
 tasks.named('build') { dependsOn ':velocity-plugin:build' }
 
 loom {
@@ -51,8 +68,8 @@ loom {
             name 'Manhunt Game Tests'
             source sourceSets.gametest
             vmArg '-Dfabric-api.gametest'
-            vmArg "-Dfabric-api.gametest.report-file=${layout.buildDirectory.get()}/gametest-results.xml"
-            runDir 'build/gametest'
+            vmArg "-Dfabric-api.gametest.report-file=${layout.buildDirectory.get()}/gametest${linkedHardcoreTests ? '-linked-hardcore' : ''}-results.xml"
+            runDir linkedHardcoreTests ? 'build/gametest-linked-hardcore' : 'build/gametest'
         }
     }
 }

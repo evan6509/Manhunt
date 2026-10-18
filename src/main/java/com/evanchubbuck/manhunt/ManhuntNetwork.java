@@ -61,6 +61,10 @@ final class ManhuntNetwork {
     }
 
     static void configure(MinecraftServer server, Config config) {
+        if (config.enabled() && LinkedHardcoreCompat.installed()) {
+            throw new IllegalStateException("Linked Hardcore owns world transfers and resets. Set enabled=false in "
+                    + "config/manhunt/network.json and remove the Manhunt Velocity plugin from this proxy.");
+        }
         Bridge bridge = new Bridge(config, UUID.randomUUID(), server.getServerDirectory().resolve(
                 config.enabled() ? config.controlDirectory() : "network"));
         BRIDGES.put(server, bridge);
@@ -79,6 +83,7 @@ final class ManhuntNetwork {
     static boolean enabled(MinecraftServer server) { return config(server).enabled(); }
 
     static boolean canStart(MinecraftServer server, UUID requestedRunId) {
+        if (LinkedHardcoreCompat.waiting(server)) return false;
         if (!enabled(server)) return true;
         var state = ManhuntState.get(server);
         if (state.completedRun().isPresent()) return false;

@@ -15,11 +15,16 @@ public final class ManhuntMod implements ModInitializer {
                 ManhuntCommands.register(dispatcher));
         ServerTickEvents.END_SERVER_TICK.register(ManhuntService::tick);
         ServerLifecycleEvents.SERVER_STARTED.register(ManhuntService::onServerStarted);
-        ServerLifecycleEvents.SERVER_STOPPED.register(ManhuntNetwork::onServerStopped);
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+            ManhuntNetwork.onServerStopped(server);
+            LinkedHardcoreCompat.onServerStopped(server);
+        });
         ServerLivingEntityEvents.AFTER_DEATH.register(ManhuntService::afterDeath);
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
                 ManhuntService.onPlayerReady(handler.getPlayer()));
-        ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) ->
-                ManhuntService.onPlayerReady(newPlayer));
+        ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> {
+            LinkedHardcoreCompat.afterRespawn(newPlayer, alive);
+            ManhuntService.onPlayerReady(newPlayer);
+        });
     }
 }

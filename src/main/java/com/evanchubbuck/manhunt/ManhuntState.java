@@ -21,7 +21,8 @@ final class ManhuntState extends SavedData {
             Hunt.CODEC.optionalFieldOf("hunt").forGetter(state -> state.hunt),
             Codec.BOOL.optionalFieldOf("locator_bar_before_hunt").forGetter(state -> state.locatorBarBeforeHunt),
             UUIDUtil.CODEC.optionalFieldOf("world_id").forGetter(state -> Optional.of(state.worldId)),
-            Completion.CODEC.optionalFieldOf("completed_run").forGetter(state -> state.completedRun)
+            Completion.CODEC.optionalFieldOf("completed_run").forGetter(state -> state.completedRun),
+            Codec.BOOL.optionalFieldOf("linked_transfer_pending", false).forGetter(state -> state.linkedTransferPending)
     ).apply(instance, ManhuntState::new));
     private static final SavedDataType<ManhuntState> TYPE = new SavedDataType<>(
             Identifier.fromNamespaceAndPath("manhunt", "state"), ManhuntState::new, CODEC, null);
@@ -30,19 +31,21 @@ final class ManhuntState extends SavedData {
     private Optional<Boolean> locatorBarBeforeHunt;
     private UUID worldId;
     private Optional<Completion> completedRun;
+    private boolean linkedTransferPending;
     private boolean identityNeedsSave;
     private int ticksUntilUpdate = UPDATE_INTERVAL_TICKS;
 
     ManhuntState() {
-        this(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
+        this(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), false);
     }
 
     private ManhuntState(Optional<Hunt> hunt, Optional<Boolean> locatorBarBeforeHunt,
-                         Optional<UUID> worldId, Optional<Completion> completedRun) {
+                         Optional<UUID> worldId, Optional<Completion> completedRun, boolean linkedTransferPending) {
         this.hunt = hunt;
         this.locatorBarBeforeHunt = hunt.isPresent() ? locatorBarBeforeHunt : Optional.empty();
         this.worldId = worldId.orElseGet(UUID::randomUUID);
         this.completedRun = hunt.isEmpty() ? completedRun : Optional.empty();
+        this.linkedTransferPending = linkedTransferPending;
         identityNeedsSave = worldId.isEmpty();
     }
 
@@ -63,11 +66,19 @@ final class ManhuntState extends SavedData {
 
     Optional<Completion> completedRun() { return completedRun; }
 
+    boolean linkedTransferPending() { return linkedTransferPending; }
+
+    void awaitLinkedTransfer() {
+        linkedTransferPending = true;
+        setDirty();
+    }
+
     void restoreNetworkCheckpoint(ManhuntState saved) {
         worldId = saved.worldId;
         hunt = saved.hunt;
         completedRun = saved.completedRun;
         locatorBarBeforeHunt = saved.locatorBarBeforeHunt;
+        linkedTransferPending = saved.linkedTransferPending;
         ticksUntilUpdate = saved.ticksUntilUpdate;
         identityNeedsSave = false;
         setDirty();

@@ -2,6 +2,8 @@ package com.evanchubbuck.manhunt;
 
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.serialization.JsonOps;
+import com.mojang.authlib.GameProfile;
+import io.netty.channel.embedded.EmbeddedChannel;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import com.evanchubbuck.manhunt.network.NetworkFiles;
@@ -15,6 +17,12 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ClientInformation;
+import net.minecraft.server.network.CommonListenerCookie;
+import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket;
 import net.minecraft.server.permissions.LevelBasedPermissionSet;
 import net.minecraft.server.permissions.PermissionSet;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -367,19 +375,29 @@ public final class ManhuntGameTests {
         helper.succeed();
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final GameTestHelper helper;
         final MinecraftServer server;
         final ManhuntState state;
+        final ManhuntState originalState;
         final boolean originalLocatorBar;
         final ManhuntNetwork.Config originalNetwork;
         final byte[] originalNetworkCheckpoint;
         final List<ServerPlayer> players = new ArrayList<>();
+        final List<EmbeddedChannel> channels = new ArrayList<>();
+        final boolean realPlayers;
 
         Fixture(GameTestHelper helper) {
+            this(helper, false);
+        }
+
+        Fixture(GameTestHelper helper, boolean realPlayers) {
+            this.realPlayers = realPlayers;
             this.helper = helper;
             server = helper.getLevel().getServer();
             state = ManhuntState.get(server);
+            originalState = ManhuntState.CODEC.parse(JsonOps.INSTANCE,
+                    ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, state).getOrThrow()).getOrThrow();
             originalNetwork = ManhuntNetwork.config(server);
             try {
                 Path checkpoint = ManhuntNetwork.checkpointFile(server);
@@ -393,9 +411,43 @@ public final class ManhuntGameTests {
         }
 
         ServerPlayer player() {
+            if (realPlayers) {
+                var profile = new GameProfile(UUID.randomUUID(), "hunter" + players.size());
+                var player = new ServerPlayer(server, helper.getLevel(), profile, ClientInformation.createDefault());
+                var connection = new Connection(PacketFlow.SERVERBOUND);
+                channels.add(new EmbeddedChannel(connection));
+                server.getPlayerList().placeNewPlayer(connection, player, CommonListenerCookie.createInitial(profile, false));
+                players.add(player);
+                player.setGameMode(net.minecraft.world.level.GameType.SURVIVAL);
+                player.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+                ManhuntService.onPlayerReady(player);
+                return player;
+            }
             var player = helper.makeMockServerPlayerInLevel();
             players.add(player);
             return player;
+        }
+
+        ServerPlayer respawn(ServerPlayer player) {
+            var replacement = server.getPlayerList().respawn(player, false,
+                    net.minecraft.world.entity.Entity.RemovalReason.KILLED);
+            players.add(replacement);
+            return replacement;
+        }
+
+        int deathFrames() throws ReflectiveOperationException {
+            int count = 0;
+            for (var channel : channels) {
+                Object packet;
+                while ((packet = channel.readOutbound()) != null) {
+                    if (packet instanceof ClientboundCustomPayloadPacket custom
+                            && custom.payload().type().id().toString().equals("linkedhardcore:main")) {
+                        byte[] frame = (byte[]) custom.payload().getClass().getMethod("data").invoke(custom.payload());
+                        if (frame.length > 0 && frame[0] == 1) count++;
+                    }
+                }
+            }
+            return count;
         }
 
         int command(ServerPlayer player, String command, boolean operator) throws CommandSyntaxException {
@@ -417,6 +469,8 @@ public final class ManhuntGameTests {
         public void close() {
             ManhuntService.stop(server);
             state.stop(server);
+            state.restoreNetworkCheckpoint(originalState);
+            LinkedHardcoreCompat.onServerStopped(server);
             ManhuntNetwork.configure(server, originalNetwork);
             try {
                 if (originalNetworkCheckpoint == null) Files.deleteIfExists(ManhuntNetwork.checkpointFile(server));
@@ -429,6 +483,7 @@ public final class ManhuntGameTests {
                 if (server.getPlayerList().getPlayer(player.getUUID()) != null) server.getPlayerList().remove(player);
                 player.discard();
             }
+            for (var channel : channels) channel.finishAndReleaseAll();
         }
     }
 

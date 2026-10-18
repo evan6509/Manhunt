@@ -15,6 +15,8 @@ final class ManhuntCommands {
     private static final SimpleCommandExceptionType NOT_RUNNING = error("No manhunt is running.");
     private static final SimpleCommandExceptionType RUNNER_COMPASS = error("The runner cannot request a hunting compass.");
     private static final SimpleCommandExceptionType WAITING_FOR_WORLD = error("Waiting for the fresh world and automatic runner selection.");
+    private static final SimpleCommandExceptionType WAITING_FOR_LINKED_WORLD = error(
+            "Waiting for Linked Hardcore to transfer everyone to a fresh world.");
     private static final SimpleCommandExceptionType START_FAILED = error("Unable to save the new hunt. Check the server log and try again.");
 
     private ManhuntCommands() {}
@@ -26,7 +28,10 @@ final class ManhuntCommands {
                         .requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER))
                         .then(Commands.argument("player", EntityArgument.player()).executes(context -> {
                             if (ManhuntState.get(context.getSource().getServer()).hunt().isPresent()) throw ALREADY_RUNNING.create();
-                            if (!ManhuntNetwork.canStart(context.getSource().getServer(), null)) throw WAITING_FOR_WORLD.create();
+                            if (!ManhuntNetwork.canStart(context.getSource().getServer(), null)) {
+                                throw (LinkedHardcoreCompat.waiting(context.getSource().getServer())
+                                        ? WAITING_FOR_LINKED_WORLD : WAITING_FOR_WORLD).create();
+                            }
                             if (!ManhuntService.start(context.getSource().getServer(), EntityArgument.getPlayer(context, "player"))) {
                                 throw START_FAILED.create();
                             }
@@ -58,7 +63,10 @@ final class ManhuntCommands {
         var state = ManhuntState.get(source.getServer());
         if (state.hunt().isEmpty()) {
             source.sendSuccess(() -> Component.literal(!ManhuntNetwork.canStart(source.getServer(), null)
-                    ? "Waiting for the fresh world and automatic runner selection." : "No manhunt is running. Use /manhunt start <player>."), false);
+                    ? LinkedHardcoreCompat.waiting(source.getServer())
+                            ? "Waiting for Linked Hardcore to transfer everyone to a fresh world."
+                            : "Waiting for the fresh world and automatic runner selection."
+                    : "No manhunt is running. Use /manhunt start <player>."), false);
         } else {
             var hunt = state.hunt().orElseThrow();
             boolean online = source.getServer().getPlayerList().getPlayer(hunt.runnerId()) != null;

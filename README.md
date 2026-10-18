@@ -91,6 +91,41 @@ The bridge defaults to disabled for standalone installations. Its generated
 `controlDirectory`. Modern forwarding uses an authenticated proxy and a shared
 secret; backend ports stay private.
 
+## Using your Linked Hardcore setup
+
+Manhunt automatically detects the Fabric mod from
+[Linked Hardcore](https://github.com/evan6509/linked-hardcore). Install this
+Manhunt JAR on **every Linked Hardcore backend**, alongside Linked Hardcore and
+Fabric API **0.156.0+26.2 or newer for 26.2**. Keep your existing Linked Hardcore
+proxy, configuration, and reset executor. No Manhunt plugin belongs on that
+proxy. Leave `enabled` set to `false` in `config/manhunt/network.json`;
+starting both world controllers together is rejected with a configuration error.
+
+During a hunt, **only the runner's death** is reported to Linked Hardcore.
+Hunters can die, respawn into play, and recover their compasses without ending
+the run or incrementing Linked Hardcore's proxy death counter. Runner death
+ends the hunt and preserves the original death report; Linked Hardcore handles
+its timer, spectator countdown, transfer, and reset. Completed source worlds
+stay closed across respawns, reconnects, and backend restarts. A transfer
+initiated by the proxy on another backend also closes the local hunt.
+
+Start a hunt with `/manhunt start <runner>` in each fresh world. Automatic
+runner selection belongs to Manhunt's separate Velocity stack and is not
+available through the current Linked Hardcore protocol. Dragon victory and
+`/manhunt stop` end the hunt **in the current world**: Linked Hardcore currently
+supports death-triggered transfers only, so Manhunt does not fabricate deaths
+to request a transfer. Outside a hunt, ordinary Linked Hardcore rules apply:
+any player's death can end its shared run. Separate simultaneous backends have
+separate Manhunt runner selections and snapshots.
+
+For the existing Linked Hardcore Docker deployment, stop its backend containers
+and copy the Manhunt JAR into each persistent backend's `mods/` directory
+(`/lh/server-a/mods/`, `/lh/server-b/mods/`, and any additional backends).
+Restart using your existing Linked Hardcore launch command. Its executor
+preserves those mod directories when replacing worlds; use the Linked Hardcore
+Compose stack for that installation. Update every backend together. Never
+replace or delete an active world's files to install the mod.
+
 ## Build and verify
 
 Use a JDK 25 installation, then run:
@@ -104,6 +139,17 @@ is `velocity-plugin/build/libs/manhunt-velocity-1.0.0+mc26.2.jar`. The `-sources
 is source code, not a second mod to install. Tests are in a separate source set
 and are excluded from the installable JAR. The GameTest report is written to
 `build/gametest-results.xml`.
+
+Run the separate compatibility suite against a built Linked Hardcore Fabric JAR:
+
+```sh
+./gradlew --no-daemon runGametest -PlinkedHardcoreJar=/absolute/path/to/fabric-mod-0.1.0.jar
+```
+
+This loads the actual companion with Fabric API 0.156.0+26.2 and tests its
+transformed death-report and transfer code. Its report is
+`build/gametest-linked-hardcore-results.xml`. The external JAR is used only by
+the test runtime and is never bundled in the installable Manhunt JAR.
 
 The implementation follows Fabric's [command registration API](https://docs.fabricmc.net/develop/commands/basics)
 and [server GameTest framework](https://docs.fabricmc.net/develop/automatic-testing).
