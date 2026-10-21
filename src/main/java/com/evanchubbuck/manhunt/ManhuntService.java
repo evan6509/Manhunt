@@ -55,10 +55,15 @@ final class ManhuntService {
         String runnerName = state.hunt().orElseThrow().runnerName();
         boolean linkedTransfer = LinkedHardcoreCompat.installed()
                 && (outcome.equals("runner_died") || outcome.equals("linked_transfer"));
+        // Either listener may run first. Commit the companion's resend identity
+        // before mutating/saving Manhunt state, rather than at the later send hook.
+        String deathGeneration = linkedTransfer && outcome.equals("runner_died")
+                ? LinkedHardcoreCompat.prepareDeathReport(state.hunt().orElseThrow().runnerId()) : null;
         if (ManhuntNetwork.enabled(server) || linkedTransfer) state.complete(server, outcome);
         else state.stop(server);
         if (linkedTransfer) {
             state.awaitLinkedTransfer();
+            if (deathGeneration != null) state.recordLinkedDeathGeneration(deathGeneration);
             server.overworld().getDataStorage().saveAndJoin();
             LinkedHardcoreCompat.holdPlayers(server);
         }
@@ -129,6 +134,7 @@ final class ManhuntService {
     }
 
     static void onServerStarted(MinecraftServer server) {
+        LinkedHardcoreCompat.validateRecovery(server);
         ManhuntState.get(server).disableLocatorBar(server);
         ManhuntNetwork.onServerStarted(server);
         LinkedHardcoreCompat.holdPlayers(server);

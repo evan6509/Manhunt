@@ -18,6 +18,123 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** Invoked only by -PlinkedHardcoreJar, against the actual transformed companion classes. */
 public final class ManhuntLinkedHardcoreGameTests {
     @GameTest
+    public void crashAfterLatchBeforeFirstCompanionSendRecoversDeath(GameTestHelper helper) throws Exception {
+        crashRecovery(helper, false);
+    }
+
+    @GameTest
+    public void crashInsideCompanionHookBeforeSendBodyRecoversDeath(GameTestHelper helper) throws Exception {
+        crashRecovery(helper, true);
+    }
+
+    private void crashRecovery(GameTestHelper helper, boolean companionFirst) throws Exception {
+        try (var f = new ManhuntGameTests.Fixture(helper, true)) {
+            var runner = f.player();
+            ManhuntService.start(f.server, runner);
+            // Crash at the send boundary in both listener orders, after the
+            // native latch commit but before the companion send body can execute.
+            if (companionFirst) {
+                helper.assertTrue(LinkedHardcoreCompat.allowDeathReport(runner), "Hook permits the original runner report");
+            } else {
+                ManhuntService.afterDeath(runner, runner.damageSources().generic());
+            }
+            var nativeFile = net.minecraft.world.level.dimension.DimensionType.getStorageFolder(
+                    net.minecraft.world.level.Level.OVERWORLD,
+                    f.server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT))
+                    .resolve("data/manhunt/state.dat");
+            var tag = net.minecraft.nbt.NbtIo.readCompressed(nativeFile, net.minecraft.nbt.NbtAccounter.unlimitedHeap());
+            var loaded = ManhuntState.CODEC.parse(net.minecraft.nbt.NbtOps.INSTANCE,
+                    tag.getCompoundOrEmpty("data")).getOrThrow();
+            helper.assertTrue(loaded.linkedTransferPending(), "Crash point is after the native latch commit");
+            helper.assertValueEqual(f.deathFrames(), 0, "Crash point is before the first companion send");
+            LinkedHardcoreCompat.onServerStopped(f.server);
+            f.state.restoreNetworkCheckpoint(loaded);
+            LinkedHardcoreCompat.validateRecovery(f.server);
+            var restarted = messenger(); // Discard the entire old sender and its in-memory retry queue.
+            invoke(restarted, "checkPendingAcks", MinecraftServer.class, f.server);
+            var recovered = f.deathReportFrames();
+            helper.assertValueEqual(recovered.size(), 1,
+                    "Restart must resend the durably recorded runner death without a new death callback");
+            String generation = (String) restarted.getClass().getMethod("currentGenerationId").invoke(restarted);
+            byte[] expected = (byte[]) Class.forName("dev.linkedhardcore.fabric.net.Protocol")
+                    .getMethod("encodePlayerDied", UUID.class, String.class).invoke(null, runner.getUUID(), generation);
+            helper.assertTrue(java.util.Arrays.equals(expected, recovered.getFirst()),
+                    "Restart must preserve the exact deceased UUID, generation, and frame bytes");
+            helper.assertTrue(f.state.linkedTransferPending(), "Recovery keeps the completed source closed");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void legacyLatchedDeathWithoutDurableIdentityFailsClosed(GameTestHelper helper) throws Exception {
+        try (var f = new ManhuntGameTests.Fixture(helper, true)) {
+            var runner = f.player();
+            ManhuntService.start(f.server, runner);
+            ManhuntService.afterDeath(runner, runner.damageSources().generic());
+            var legacy = ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, f.state).getOrThrow().getAsJsonObject();
+            legacy.remove("linked_death_generation");
+            f.state.restoreNetworkCheckpoint(ManhuntState.CODEC.parse(JsonOps.INSTANCE, legacy).getOrThrow());
+            try {
+                ManhuntService.onServerStarted(f.server);
+                throw helper.assertionException("Old latched death without durable intent proof was reopened");
+            } catch (IllegalStateException expected) {
+                helper.assertTrue(expected.getMessage().contains("death"), "Recovery explains the missing death identity");
+            }
+            helper.assertTrue(f.state.linkedTransferPending(), "Failing recovery preserves the source latch");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void outboxFailureCannotCommitTheManhuntLatchOrSend(GameTestHelper helper) throws Exception {
+        try (var f = new ManhuntGameTests.Fixture(helper, true)) {
+            var runner = f.player();
+            ManhuntService.start(f.server, runner);
+            var directory = (java.nio.file.Path) Class.forName("dev.linkedhardcore.fabric.config.ModConfig")
+                    .getField("CONFIG_DIR").get(null);
+            var file = directory.resolve("death-outbox.json");
+            byte[] previous = java.nio.file.Files.exists(file) ? java.nio.file.Files.readAllBytes(file) : null;
+            java.nio.file.Files.deleteIfExists(file);
+            java.nio.file.Files.createDirectory(file);
+            java.nio.file.Files.writeString(file.resolve("blocker"), "disposable failure fixture");
+            try {
+                try {
+                    ManhuntService.afterDeath(runner, runner.damageSources().generic());
+                    throw helper.assertionException("Death intent failure was ignored before the completion commit");
+                } catch (IllegalStateException expected) {
+                    helper.assertTrue(f.state.hunt().isPresent() && !f.state.linkedTransferPending(),
+                            "Failed intent persistence must precede any hunt/latch mutation");
+                    helper.assertValueEqual(f.deathFrames(), 0, "Failed intent cannot permit a send");
+                }
+            } finally {
+                java.nio.file.Files.delete(file.resolve("blocker"));
+                java.nio.file.Files.delete(file);
+                if (previous != null) java.nio.file.Files.write(file, previous);
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void foreignDeathGenerationCannotRecoverIntoThisWorld(GameTestHelper helper) throws Exception {
+        try (var f = new ManhuntGameTests.Fixture(helper, true)) {
+            var runner = f.player();
+            ManhuntService.start(f.server, runner);
+            ManhuntService.afterDeath(runner, runner.damageSources().generic());
+            var foreign = ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, f.state).getOrThrow().getAsJsonObject();
+            foreign.addProperty("linked_death_generation", "another-world");
+            f.state.restoreNetworkCheckpoint(ManhuntState.CODEC.parse(JsonOps.INSTANCE, foreign).getOrThrow());
+            try {
+                ManhuntService.onServerStarted(f.server);
+                throw helper.assertionException("Foreign death generation was accepted");
+            } catch (IllegalStateException expected) {
+                helper.assertTrue(f.state.linkedTransferPending(), "Foreign-generation recovery preserves the latch");
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest
     public void hunterReportsAreSuppressedAndRunnerReportsOnce(GameTestHelper helper) throws Exception {
         try (var f = new ManhuntGameTests.Fixture(helper, true)) {
             helper.assertTrue(LinkedHardcoreCompat.installed(), "Actual Linked Hardcore must be loaded");
@@ -32,7 +149,7 @@ public final class ManhuntLinkedHardcoreGameTests {
             helper.assertTrue(pending(messenger).containsKey(runner.getUUID()), "Only the runner is reported");
             helper.assertTrue(f.state.linkedTransferPending(), "Runner death closes the source");
             helper.assertTrue(f.state.hunt().isEmpty(), "Runner death ends the hunt");
-            pending(messenger).clear();
+            clearOutbox(f.server);
             report(messenger, runner);
             report(messenger, hunter);
             helper.assertTrue(pending(messenger).isEmpty(), "Duplicate and teammate reports stay suppressed");
@@ -197,6 +314,18 @@ public final class ManhuntLinkedHardcoreGameTests {
     }
 
     @GameTest
+    public void idleHookCommitsTheDeathBeforeReturningPermission(GameTestHelper helper) throws Exception {
+        try (var f = new ManhuntGameTests.Fixture(helper, true)) {
+            var player = f.player();
+            helper.assertTrue(LinkedHardcoreCompat.allowDeathReport(player), "Ordinary death is permitted");
+            helper.assertValueEqual(f.deathFrames(), 0, "The send body has not run");
+            helper.assertTrue(pending(messenger()).containsKey(player.getUUID()),
+                    "Even outside a hunt, permission requires the durable death identity first");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
     public void idleDeathReportsRetainOrdinaryLinkedHardcoreBehavior(GameTestHelper helper) throws Exception {
         try (var f = new ManhuntGameTests.Fixture(helper, true)) {
             var player = f.player();
@@ -244,20 +373,50 @@ public final class ManhuntLinkedHardcoreGameTests {
     }
 
     private static Object messenger() throws Exception {
-        var config = config();
-        return Class.forName("dev.linkedhardcore.fabric.net.ProxyMessenger")
+        var config = Class.forName("dev.linkedhardcore.fabric.config.ModConfig").getMethod("load").invoke(null);
+        var writer = Class.forName("dev.linkedhardcore.fabric.status.StatusFileWriter")
                 .getConstructor(config.getClass()).newInstance(config);
+        java.util.function.Supplier<String> generation = () -> {
+            try { return (String) writer.getClass().getMethod("generationId").invoke(writer); }
+            catch (ReflectiveOperationException error) { throw new IllegalStateException(error); }
+        };
+        return Class.forName("dev.linkedhardcore.fabric.net.ProxyMessenger")
+                .getConstructor(config.getClass(), java.util.function.Supplier.class).newInstance(config, generation);
     }
 
     private static void report(Object messenger, ServerPlayer player) throws Exception {
         invoke(messenger, "sendPlayerDied", ServerPlayer.class, player);
     }
 
-    @SuppressWarnings("unchecked")
-    private static Map<UUID, Long> pending(Object messenger) throws Exception {
-        var field = messenger.getClass().getDeclaredField("pendingAcks");
+    private static Map<UUID, Object> pending(Object messenger) throws Exception {
+        var field = messenger.getClass().getDeclaredField("outbox");
         field.setAccessible(true);
-        return (Map<UUID, Long>) field.get(messenger);
+        var outbox = field.get(messenger);
+        var deaths = (java.util.List<?>) outbox.getClass().getMethod("pending").invoke(outbox);
+        Map<UUID, Object> result = new java.util.HashMap<>();
+        for (var death : deaths) {
+            result.put((UUID) death.getClass().getMethod("playerUuid").invoke(death), death);
+        }
+        return result;
+    }
+
+    static void clearOutbox(MinecraftServer server) throws Exception {
+        var messenger = messenger();
+        var inbound = messenger.getClass().getDeclaredMethod("handleInbound", MinecraftServer.class, byte[].class);
+        inbound.setAccessible(true);
+        for (var death : pending(messenger).values()) {
+            var player = (UUID) death.getClass().getMethod("playerUuid").invoke(death);
+            var generation = (String) death.getClass().getMethod("generationId").invoke(death);
+            var buf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            try {
+                buf.writeByte(0x0a);
+                buf.writeUUID(player);
+                buf.writeUtf(generation);
+                byte[] frame = new byte[buf.readableBytes()];
+                buf.readBytes(frame);
+                inbound.invoke(messenger, server, frame);
+            } finally { buf.release(); }
+        }
     }
 
     private static Object countdown(AtomicInteger notified) throws Exception {

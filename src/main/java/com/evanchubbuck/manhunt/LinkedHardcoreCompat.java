@@ -22,6 +22,38 @@ public final class LinkedHardcoreCompat {
         return FabricLoader.getInstance().isModLoaded("linkedhardcore");
     }
 
+    /** The companion must commit its outbox BEFORE Manhunt can commit a runner-death latch. */
+    static String prepareDeathReport(UUID runner) {
+        return companionCall("preparePlayerDeath", new Class<?>[]{UUID.class}, runner);
+    }
+
+    static void validateRecovery(MinecraftServer server) {
+        if (!installed()) return;
+        String generation = companionCall("currentDeathGeneration", new Class<?>[0]);
+        var state = ManhuntState.get(server);
+        if (!state.linkedTransferPending() || state.completedRun().isEmpty()
+                || !state.completedRun().orElseThrow().outcome().equals("runner_died")) return;
+        if (state.linkedDeathGeneration().isEmpty()) {
+            throw new IllegalStateException("Latched runner death lacks durable death intent proof. Preserve this world "
+                    + "and reconcile the companion/proxy journals before upgrading; never clear the latch to reopen it.");
+        }
+        if (!state.linkedDeathGeneration().orElseThrow().equals(generation)) {
+            throw new IllegalStateException("Latched runner death belongs to another Linked Hardcore generation; preserve the world");
+        }
+    }
+
+    private static String companionCall(String method, Class<?>[] types, Object... arguments) {
+        try {
+            return (String) Class.forName("dev.linkedhardcore.fabric.LinkedHardcoreMod")
+                    .getMethod(method, types).invoke(null, arguments);
+        } catch (java.lang.reflect.InvocationTargetException error) {
+            throw new IllegalStateException("Linked Hardcore durable death intent failed", error.getCause());
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalStateException("Linked Hardcore durable death outbox API is required. Upgrade the companion "
+                    + "on every backend before playing; preserve all existing worlds and journals.", error);
+        }
+    }
+
     /** Called at the companion's send boundary, independently of death-event listener order. */
     public static boolean allowDeathReport(ServerPlayer player) {
         var server = player.level().getServer();
@@ -30,11 +62,15 @@ public final class LinkedHardcoreCompat {
             if (!state.isRunner(player)) return false;
             ManhuntService.finish(server, "runner_died");
         }
-        if (!state.linkedTransferPending()) return true; // Ordinary Linked Hardcore outside a hunt.
+        if (!state.linkedTransferPending()) {
+            prepareDeathReport(player.getUUID()); // Ordinary Linked Hardcore also commits before permission.
+            return true;
+        }
         var completed = state.completedRun().orElse(null);
         if (completed == null || !completed.outcome().equals("runner_died")
                 || !completed.runnerId().equals(player.getUUID())
                 || completed.runId().equals(REPORTED_RUNS.get(server))) return false;
+        prepareDeathReport(player.getUUID());
         REPORTED_RUNS.put(server, completed.runId());
         return true;
     }

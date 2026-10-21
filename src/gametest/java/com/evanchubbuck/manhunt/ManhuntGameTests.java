@@ -436,18 +436,22 @@ public final class ManhuntGameTests {
         }
 
         int deathFrames() throws ReflectiveOperationException {
-            int count = 0;
+            return deathReportFrames().size();
+        }
+
+        List<byte[]> deathReportFrames() throws ReflectiveOperationException {
+            List<byte[]> frames = new ArrayList<>();
             for (var channel : channels) {
                 Object packet;
                 while ((packet = channel.readOutbound()) != null) {
                     if (packet instanceof ClientboundCustomPayloadPacket custom
                             && custom.payload().type().id().toString().equals("linkedhardcore:main")) {
                         byte[] frame = (byte[]) custom.payload().getClass().getMethod("data").invoke(custom.payload());
-                        if (frame.length > 0 && frame[0] == 1) count++;
+                        if (frame.length > 0 && (frame[0] == 1 || frame[0] == 9)) frames.add(frame);
                     }
                 }
             }
-            return count;
+            return frames;
         }
 
         int command(ServerPlayer player, String command, boolean operator) throws CommandSyntaxException {
@@ -467,6 +471,10 @@ public final class ManhuntGameTests {
 
         @Override
         public void close() {
+            if (LinkedHardcoreCompat.installed()) {
+                try { ManhuntLinkedHardcoreGameTests.clearOutbox(server); }
+                catch (Exception error) { throw new IllegalStateException("Could not clean disposable outbox fixture", error); }
+            }
             ManhuntService.stop(server);
             state.stop(server);
             state.restoreNetworkCheckpoint(originalState);

@@ -26,6 +26,7 @@ final class ManhuntState extends SavedData {
             UUIDUtil.CODEC.optionalFieldOf("world_id").forGetter(state -> Optional.of(state.worldId)),
             Completion.CODEC.optionalFieldOf("completed_run").forGetter(state -> state.completedRun),
             Codec.BOOL.optionalFieldOf("linked_transfer_pending", false).forGetter(state -> state.linkedTransferPending),
+            Codec.STRING.optionalFieldOf("linked_death_generation").forGetter(state -> state.linkedDeathGeneration),
             UUIDUtil.CODEC.listOf().optionalFieldOf("excluded_dragon_defeats", List.of())
                     .forGetter(state -> List.copyOf(state.excludedDragonDefeats))
     ).apply(instance, ManhuntState::new));
@@ -37,6 +38,7 @@ final class ManhuntState extends SavedData {
     private UUID worldId;
     private Optional<Completion> completedRun;
     private boolean linkedTransferPending;
+    private Optional<String> linkedDeathGeneration;
     private boolean identityNeedsSave;
     // Reading a new/legacy state marks it dirty, but its generated UUID is still provisional.
     private boolean identityEstablished;
@@ -44,17 +46,18 @@ final class ManhuntState extends SavedData {
     private int ticksUntilUpdate = UPDATE_INTERVAL_TICKS;
 
     ManhuntState() {
-        this(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), false, List.of());
+        this(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), false, Optional.empty(), List.of());
     }
 
     private ManhuntState(Optional<Hunt> hunt, Optional<Boolean> locatorBarBeforeHunt,
                          Optional<UUID> worldId, Optional<Completion> completedRun, boolean linkedTransferPending,
-                         List<UUID> excludedDragonDefeats) {
+                         Optional<String> linkedDeathGeneration, List<UUID> excludedDragonDefeats) {
         this.hunt = hunt;
         this.locatorBarBeforeHunt = hunt.isPresent() ? locatorBarBeforeHunt : Optional.empty();
         this.worldId = worldId.orElseGet(UUID::randomUUID);
         this.completedRun = hunt.isEmpty() ? completedRun : Optional.empty();
         this.linkedTransferPending = linkedTransferPending;
+        this.linkedDeathGeneration = linkedDeathGeneration;
         identityNeedsSave = worldId.isEmpty();
         identityEstablished = worldId.isPresent();
         this.excludedDragonDefeats = new HashSet<>(excludedDragonDefeats);
@@ -89,6 +92,13 @@ final class ManhuntState extends SavedData {
 
     boolean linkedTransferPending() { return linkedTransferPending; }
 
+    Optional<String> linkedDeathGeneration() { return linkedDeathGeneration; }
+
+    void recordLinkedDeathGeneration(String generation) {
+        linkedDeathGeneration = Optional.of(generation);
+        setDirty();
+    }
+
     void awaitLinkedTransfer() {
         linkedTransferPending = true;
         setDirty();
@@ -100,6 +110,7 @@ final class ManhuntState extends SavedData {
         completedRun = saved.completedRun;
         locatorBarBeforeHunt = saved.locatorBarBeforeHunt;
         linkedTransferPending = saved.linkedTransferPending;
+        linkedDeathGeneration = saved.linkedDeathGeneration;
         ticksUntilUpdate = saved.ticksUntilUpdate;
         identityNeedsSave = false;
         identityEstablished = saved.hasEstablishedWorldIdentity();
@@ -126,6 +137,7 @@ final class ManhuntState extends SavedData {
     }
 
     void stop(MinecraftServer server) {
+        linkedDeathGeneration = Optional.empty();
         excludedDragonDefeats.clear();
         locatorBarBeforeHunt.ifPresent(previous -> setLocatorBar(server, previous));
         hunt = Optional.empty();
