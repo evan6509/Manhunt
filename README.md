@@ -111,10 +111,16 @@ starting both world controllers together is rejected with a configuration error.
 During a hunt, **only the runner's death** is reported to Linked Hardcore.
 Hunters can die, respawn into play, and recover their compasses without ending
 the run or incrementing Linked Hardcore's proxy death counter. Runner death
-ends the hunt and preserves the original death report; Linked Hardcore handles
-its timer, spectator countdown, transfer, and reset. Completed source worlds
+ends the hunt after durably recording the original death report; Linked Hardcore
+handles its timer, spectator countdown, transfer, and reset. Completed source worlds
 stay closed across respawns, reconnects, and backend restarts. A transfer
 initiated by the proxy on another backend also closes the local hunt.
+
+Death reports recover after backend restart, including a crash between saving
+Manhunt's completion latch and the first send. Only a matching world-scoped ACK
+clears the durable outbox. This requires the updated companion preparation API;
+old ambiguous runner-death latches fail closed for operator reconciliation.
+See [delivery ordering, upgrade rules, and durability limits](docs/LINKED_HARDCORE.md).
 
 Start a hunt with `/manhunt start <runner>` in each fresh world. Automatic
 runner selection belongs to Manhunt's separate Velocity stack and is not
