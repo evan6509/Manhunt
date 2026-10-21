@@ -231,6 +231,12 @@ public final class ManhuntLinkedHardcoreGameTests {
     @GameTest public void lateHuntersAndReplacementCompasses(GameTestHelper helper) throws Exception {
         new ManhuntGameTests().replacementAndLateJoinUseStoredLocation(helper);
     }
+    @GameTest public void previousDragonCannotWinAgain(GameTestHelper helper) {
+        new ManhuntGameTests().dyingDragonCannotWinAnotherHunt(helper);
+    }
+    @GameTest public void dyingDragonAtStartRemainsExcludedAfterReload(GameTestHelper helper) {
+        new ManhuntGameTests().dragonAlreadyDyingBeforeStartCannotWinHunt(helper);
+    }
 
     private static Object config() throws Exception {
         return Class.forName("dev.linkedhardcore.fabric.config.ModConfig")

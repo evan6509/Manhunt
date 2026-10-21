@@ -10,6 +10,8 @@ import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
@@ -78,6 +80,85 @@ class RotationCoordinatorTest {
         coordinator.tick();
         assertFalse(Files.exists(fixture.file("a", "reset.request.json")));
         assertFalse(Files.exists(fixture.file("b", "start.request.json")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void failedTransferRemainsRequiredAfterDisconnectAndProxyRestart(boolean restart) throws Exception {
+        Fixture fixture = new Fixture();
+        Player runner = fixture.addPlayer("a"), hunter = fixture.addPlayer("a");
+        fixture.completed("a", runner.getUniqueId(), 2);
+        fixture.ready("b", 0);
+        RotationCoordinator coordinator = fixture.controller();
+        coordinator.tick();
+        fixture.complete(runner, true, true);
+        fixture.complete(hunter, false, false);
+        fixture.players.remove(hunter);
+        fixture.members.get("a").remove(hunter);
+        fixture.completed("a", runner.getUniqueId(), 0);
+        fixture.ready("b", 1);
+
+        if (restart) coordinator = fixture.controller();
+        coordinator.tick();
+        coordinator.tick();
+        assertFalse(Files.exists(fixture.file("a", "reset.request.json")),
+                "Disconnecting cannot erase a failed transfer obligation");
+        assertFalse(Files.exists(fixture.file("b", "start.request.json")));
+
+        // A reconnect into the reserved world confirms the outstanding arrival.
+        fixture.playerBackends.get(hunter.getUniqueId()).set("b");
+        fixture.players.add(hunter);
+        fixture.members.get("b").add(hunter);
+        fixture.ready("b", 2);
+        coordinator.tick();
+        coordinator.tick();
+        assertTrue(Files.exists(fixture.file("a", "reset.request.json")));
+        assertTrue(Files.exists(fixture.file("b", "start.request.json")));
+    }
+
+    @Test
+    void proxyRestartDuringTransferCannotForgetOfflineParticipant() throws Exception {
+        Fixture fixture = new Fixture();
+        Player runner = fixture.addPlayer("a"), hunter = fixture.addPlayer("a");
+        fixture.completed("a", runner.getUniqueId(), 2);
+        fixture.ready("b", 0);
+        fixture.controller().tick(); // Neither connection future has completed before the crash.
+        fixture.players.clear();
+        fixture.members.get("a").clear();
+        fixture.completed("a", runner.getUniqueId(), 0);
+        RotationCoordinator restored = fixture.controller();
+        restored.tick();
+        restored.tick();
+        assertFalse(Files.exists(fixture.file("a", "reset.request.json")));
+        assertFalse(Files.exists(fixture.file("b", "start.request.json")));
+    }
+
+    @Test
+    void confirmedArrivalSurvivesDisconnectBeforeOtherTransfersFinish() throws Exception {
+        Fixture fixture = new Fixture();
+        Player runner = fixture.addPlayer("a"), hunter = fixture.addPlayer("a");
+        fixture.completed("a", runner.getUniqueId(), 2);
+        fixture.ready("b", 0);
+        fixture.controller().tick();
+        fixture.complete(runner, true, true);
+        fixture.players.remove(runner);
+        fixture.members.get("b").remove(runner);
+        fixture.players.remove(hunter);
+        fixture.members.get("a").remove(hunter);
+        fixture.completed("a", runner.getUniqueId(), 0);
+
+        RotationCoordinator restored = fixture.controller();
+        restored.tick();
+        assertFalse(Files.exists(fixture.file("a", "reset.request.json")));
+        fixture.playerBackends.get(hunter.getUniqueId()).set("b");
+        fixture.players.add(hunter);
+        fixture.members.get("b").add(hunter);
+        fixture.ready("b", 1);
+        restored.tick();
+        restored.tick();
+        assertTrue(Files.exists(fixture.file("a", "reset.request.json")),
+                "The runner's durable arrival remains satisfied while offline");
+        assertFalse(Files.exists(fixture.file("b", "start.request.json")), "One player cannot auto-start");
     }
 
     @Test

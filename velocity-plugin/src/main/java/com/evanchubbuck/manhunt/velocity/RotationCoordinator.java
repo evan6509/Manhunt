@@ -140,6 +140,7 @@ final class RotationCoordinator {
             transition.sourceRunId = active.runId();
             transition.previousRunner = active.runnerId();
             transition.nextRunId = UUID.randomUUID();
+            rememberParticipants(transition, List.copyOf(proxy.getAllPlayers()));
             state.transition = transition;
             state.retired.put(state.activeBackend, new ControllerStore.RetiredWorld(active.worldId(), active.runId()));
             store.save(state);
@@ -215,19 +216,35 @@ final class RotationCoordinator {
                         transition.nextRunId, transition.selectedRunner));
     }
 
-    private void beginConnections(ControllerStore.Transition transition) {
+    private boolean rememberParticipants(ControllerStore.Transition transition, List<Player> players) {
+        boolean changed = false;
+        for (Player player : players) {
+            String backend = player.getCurrentServer().map(connection -> connection.getServerInfo().getName()).orElse(null);
+            if (backend != null && config.backendServers().containsKey(backend)
+                    && !backend.equals(transition.destinationBackend)) {
+                changed |= transition.requiredParticipants.add(player.getUniqueId());
+            }
+        }
+        return changed;
+    }
+
+    private void beginConnections(ControllerStore.Transition transition) throws IOException {
         Optional<RegisteredServer> registered = proxy.getServer(transition.destinationBackend);
         if (registered.isEmpty()) return;
+        List<Player> players = List.copyOf(proxy.getAllPlayers());
+        // Persist obligations before any connection can complete or a player can disappear.
+        if (rememberParticipants(transition, players)) store.save(state);
         connecting = true;
         notice("Hunt finished. Moving everyone to a fresh world.");
         List<CompletableFuture<Boolean>> outcomes = new ArrayList<>();
-        for (Player player : List.copyOf(proxy.getAllPlayers())) {
+        for (Player player : players) {
             String backend = player.getCurrentServer().map(connection -> connection.getServerInfo().getName()).orElse(null);
             if (backend == null || !config.backendServers().containsKey(backend)
                     || transition.destinationBackend.equals(backend)) continue;
             try {
                 outcomes.add(player.createConnectionRequest(registered.get()).connect().handle((result, error) -> {
                     boolean successful = error == null && result != null && result.isSuccessful();
+                    if (successful) confirmArrivals(transition);
                     if (!successful) logger.warn("Could not move {} to {}; retaining the source world", player.getUsername(),
                             transition.destinationBackend, error);
                     return successful;
@@ -243,24 +260,45 @@ final class RotationCoordinator {
         });
     }
 
+    private boolean destinationUnchanged(ControllerStore.Transition transition) {
+        return NetworkFiles.readStatus(config.backendServers().get(transition.destinationBackend).statusPath())
+                .filter(status -> status.worldId().equals(transition.destinationWorldId) && status.phase() == Phase.READY
+                        && NetworkFiles.isFresh(status, clock.getAsLong(), config.staleSeconds())).isPresent();
+    }
+
+    private synchronized void confirmArrivals(ControllerStore.Transition transition) {
+        if (halted || state.transition != transition || transition.moved || !destinationUnchanged(transition)) return;
+        try {
+            boolean changed = false;
+            for (Player player : proxy.getServer(transition.destinationBackend).orElseThrow().getPlayersConnected()) {
+                UUID id = player.getUniqueId();
+                if (transition.requiredParticipants.contains(id)) changed |= transition.confirmedArrivals.add(id);
+            }
+            if (changed) store.save(state);
+        } catch (IOException | RuntimeException exception) {
+            halt(exception);
+        }
+    }
+
     private synchronized void finishConnections(ControllerStore.Transition transition, boolean success) {
         connecting = false;
         if (halted || state.transition != transition || transition.moved) return;
         // New joins are routed to the reserved destination, so this emptiness test remains meaningful.
         boolean sourcesEmpty = config.backendServers().keySet().stream()
                 .filter(name -> !name.equals(transition.destinationBackend)).allMatch(this::serverEmpty);
-        boolean destinationUnchanged = NetworkFiles.readStatus(config.backendServers().get(transition.destinationBackend).statusPath())
-                .filter(status -> status.worldId().equals(transition.destinationWorldId) && status.phase() == Phase.READY
-                        && NetworkFiles.isFresh(status, clock.getAsLong(), config.staleSeconds())).isPresent();
-        if (!success || !sourcesEmpty || !destinationUnchanged) {
-            logger.warn("Rotation incomplete (connectionsSucceeded={}, sourcesEmpty={}, destinationUnchanged={}); retrying without resetting",
-                    success, sourcesEmpty, destinationUnchanged);
-            return;
-        }
-        transition.moved = true;
-        state.activeBackend = transition.destinationBackend;
-        state.activeWorldId = transition.destinationWorldId;
+        confirmArrivals(transition); // Also reconcile reconnects after a proxy restart.
+        if (halted) return;
+        boolean destinationUnchanged = destinationUnchanged(transition);
         try {
+            boolean allArrived = transition.confirmedArrivals.containsAll(transition.requiredParticipants);
+            if (!success || !allArrived || !sourcesEmpty || !destinationUnchanged) {
+                logger.warn("Rotation incomplete (connectionsSucceeded={}, allArrived={}, sourcesEmpty={}, destinationUnchanged={}); retrying without resetting",
+                        success, allArrived, sourcesEmpty, destinationUnchanged);
+                return;
+            }
+            transition.moved = true;
+            state.activeBackend = transition.destinationBackend;
+            state.activeWorldId = transition.destinationWorldId;
             store.save(state); // Durable active world and next run precede every reset request.
         } catch (IOException | RuntimeException exception) {
             halt(exception);

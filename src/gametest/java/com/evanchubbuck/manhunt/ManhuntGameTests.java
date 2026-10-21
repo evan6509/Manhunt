@@ -523,6 +523,71 @@ public final class ManhuntGameTests {
     }
 
     @GameTest
+    public void dyingDragonCannotWinAnotherHunt(GameTestHelper helper) {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            var dragon = new EnderDragon(EntityTypes.ENDER_DRAGON, helper.getLevel());
+            var pos = helper.absolutePos(new BlockPos(1, 2, 1));
+            dragon.snapTo(pos.getX(), pos.getY(), pos.getZ());
+            helper.assertTrue(helper.getLevel().addFreshEntity(dragon), "Dragon spawns in a loaded test chunk");
+            helper.assertTrue(helper.getLevel().getDragons().contains(dragon), "Tick polling can see the dragon");
+            try {
+                ManhuntService.start(f.server, runner);
+                dragon.setLastHurtByPlayer(runner, 100);
+                dragon.getPhaseManager().setPhase(EnderDragonPhase.DYING);
+                dragon.setHealth(1);
+                ManhuntService.tick(f.server);
+                helper.assertTrue(f.state.hunt().isEmpty(), "The original defeat wins the original hunt");
+                helper.assertTrue(ManhuntService.start(f.server, runner), "The runner can start another local hunt");
+                UUID nextRun = f.state.hunt().orElseThrow().runId();
+                ManhuntService.tick(f.server);
+                helper.assertTrue(f.state.hunt().isPresent(), "The old dying dragon cannot win the new hunt");
+                helper.assertValueEqual(f.state.hunt().orElseThrow().runId(), nextRun, "The new hunt remains active");
+            } finally {
+                dragon.discard();
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void dragonAlreadyDyingBeforeStartCannotWinHunt(GameTestHelper helper) {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            var dragon = new EnderDragon(EntityTypes.ENDER_DRAGON, helper.getLevel());
+            var pos = helper.absolutePos(new BlockPos(1, 2, 1));
+            dragon.snapTo(pos.getX(), pos.getY(), pos.getZ());
+            helper.assertTrue(helper.getLevel().addFreshEntity(dragon), "Dragon spawns in a loaded test chunk");
+            helper.assertTrue(helper.getLevel().getDragons().contains(dragon), "Start can see the existing defeat");
+            try {
+                dragon.setLastHurtByPlayer(runner, 100);
+                dragon.getPhaseManager().setPhase(EnderDragonPhase.DYING);
+                dragon.setHealth(1);
+                ManhuntService.start(f.server, runner);
+                ManhuntService.tick(f.server);
+                helper.assertTrue(f.state.hunt().isPresent(), "An out-of-hunt defeat cannot win a later hunt");
+                var saved = ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, f.state).getOrThrow();
+                f.state.restoreNetworkCheckpoint(ManhuntState.CODEC.parse(JsonOps.INSTANCE, saved).getOrThrow());
+                ManhuntService.afterDeath(dragon, dragon.damageSources().generic());
+                helper.assertTrue(f.state.hunt().isPresent(), "The old defeat stays excluded after saved hunt reload");
+                var newDragon = new EnderDragon(EntityTypes.ENDER_DRAGON, helper.getLevel());
+                try {
+                    newDragon.setLastHurtByPlayer(runner, 100);
+                    newDragon.getPhaseManager().setPhase(EnderDragonPhase.DYING);
+                    newDragon.setHealth(1);
+                    ManhuntService.afterDeath(newDragon, newDragon.damageSources().generic());
+                    helper.assertTrue(f.state.hunt().isEmpty(), "A new dragon defeat still wins the reloaded hunt");
+                } finally {
+                    newDragon.discard();
+                }
+            } finally {
+                dragon.discard();
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest
     public void networkCompletionIsDurableAndUsedWorldCannotRestart(GameTestHelper helper) throws Exception {
         try (var f = new Fixture(helper)) {
             var runner = f.player();
@@ -705,6 +770,82 @@ public final class ManhuntGameTests {
             expectCheckpointFailure(f);
             helper.assertTrue(f.state.completedRun().isPresent() && f.state.hunt().isEmpty(),
                     "An older RUNNING checkpoint cannot resurrect a completed hunt");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void foreignReadyCheckpointCannotReplaceCompletedNativeWorld(GameTestHelper helper) throws Exception {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            var directory = enableNetwork(f);
+            ManhuntService.start(f.server, runner);
+            ManhuntService.stop(f.server);
+            UUID nativeWorld = f.state.worldId();
+            var completion = f.state.completedRun();
+            var status = NetworkFiles.readStatus(directory.resolve("status.json")).orElseThrow();
+            NetworkFiles.writeAtomic(ManhuntNetwork.checkpointFile(f.server), java.util.Map.of(
+                    "schemaVersion", NetworkFiles.SCHEMA,
+                    "state", ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, new ManhuntState()).getOrThrow()));
+            expectCheckpointFailure(f);
+            helper.assertValueEqual(f.state.worldId(), nativeWorld, "Native world identity must survive rejection");
+            helper.assertValueEqual(f.state.completedRun(), completion, "Native completion must survive rejection");
+            helper.assertValueEqual(NetworkFiles.readStatus(directory.resolve("status.json")).orElseThrow(), status,
+                    "A foreign checkpoint cannot publish READY for a completed world");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void foreignReadyCheckpointCannotReplaceReadyNativeIdentity(GameTestHelper helper) throws Exception {
+        try (var f = new Fixture(helper)) {
+            var directory = enableNetwork(f);
+            UUID worldId = f.state.worldId();
+            var savedNative = ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, f.state).getOrThrow();
+            f.state.restoreNetworkCheckpoint(ManhuntState.CODEC.parse(JsonOps.INSTANCE, savedNative).getOrThrow());
+            var status = NetworkFiles.readStatus(directory.resolve("status.json")).orElseThrow();
+            NetworkFiles.writeAtomic(ManhuntNetwork.checkpointFile(f.server), java.util.Map.of(
+                    "schemaVersion", NetworkFiles.SCHEMA,
+                    "state", ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, new ManhuntState()).getOrThrow()));
+            expectCheckpointFailure(f);
+            helper.assertValueEqual(f.state.worldId(), worldId, "Even a READY native identity rejects a foreign checkpoint");
+            helper.assertValueEqual(NetworkFiles.readStatus(directory.resolve("status.json")).orElseThrow(), status,
+                    "Rejected checkpoint cannot publish a different identity");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void checkpointRecoversLegacyHuntWithoutNativeIdentity(GameTestHelper helper) throws Exception {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            enableNetwork(f);
+            ManhuntService.start(f.server, runner);
+            UUID worldId = f.state.worldId();
+            var hunt = f.state.hunt();
+            var legacy = ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, f.state).getOrThrow().getAsJsonObject();
+            legacy.remove("world_id");
+            f.state.restoreNetworkCheckpoint(ManhuntState.CODEC.parse(JsonOps.INSTANCE, legacy).getOrThrow());
+            ManhuntNetwork.configure(f.server, ManhuntNetwork.config(f.server));
+            helper.assertValueEqual(f.state.worldId(), worldId, "Checkpoint supplies an identity missing from legacy native data");
+            helper.assertValueEqual(f.state.hunt(), hunt, "Matching active lifecycle survives recovery");
+        }
+        helper.succeed();
+    }
+
+    @GameTest
+    public void checkpointRecoversWhenNativeIdentityIsMissing(GameTestHelper helper) throws Exception {
+        try (var f = new Fixture(helper)) {
+            var runner = f.player();
+            enableNetwork(f);
+            ManhuntService.start(f.server, runner);
+            ManhuntService.stop(f.server);
+            UUID worldId = f.state.worldId();
+            var completion = f.state.completedRun();
+            f.state.restoreNetworkCheckpoint(new ManhuntState()); // Simulate missing native SavedData.
+            ManhuntNetwork.configure(f.server, ManhuntNetwork.config(f.server));
+            helper.assertValueEqual(f.state.worldId(), worldId, "Checkpoint restores the lost native identity");
+            helper.assertValueEqual(f.state.completedRun(), completion, "Checkpoint recovers the completed lifecycle");
         }
         helper.succeed();
     }

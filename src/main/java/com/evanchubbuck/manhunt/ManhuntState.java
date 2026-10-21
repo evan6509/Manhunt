@@ -11,7 +11,10 @@ import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
 
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** One hunt per world; only minute snapshots, never live movement, are saved. */
@@ -22,7 +25,9 @@ final class ManhuntState extends SavedData {
             Codec.BOOL.optionalFieldOf("locator_bar_before_hunt").forGetter(state -> state.locatorBarBeforeHunt),
             UUIDUtil.CODEC.optionalFieldOf("world_id").forGetter(state -> Optional.of(state.worldId)),
             Completion.CODEC.optionalFieldOf("completed_run").forGetter(state -> state.completedRun),
-            Codec.BOOL.optionalFieldOf("linked_transfer_pending", false).forGetter(state -> state.linkedTransferPending)
+            Codec.BOOL.optionalFieldOf("linked_transfer_pending", false).forGetter(state -> state.linkedTransferPending),
+            UUIDUtil.CODEC.listOf().optionalFieldOf("excluded_dragon_defeats", List.of())
+                    .forGetter(state -> List.copyOf(state.excludedDragonDefeats))
     ).apply(instance, ManhuntState::new));
     private static final SavedDataType<ManhuntState> TYPE = new SavedDataType<>(
             Identifier.fromNamespaceAndPath("manhunt", "state"), ManhuntState::new, CODEC, null);
@@ -33,20 +38,26 @@ final class ManhuntState extends SavedData {
     private Optional<Completion> completedRun;
     private boolean linkedTransferPending;
     private boolean identityNeedsSave;
+    // Reading a new/legacy state marks it dirty, but its generated UUID is still provisional.
+    private boolean identityEstablished;
+    private Set<UUID> excludedDragonDefeats;
     private int ticksUntilUpdate = UPDATE_INTERVAL_TICKS;
 
     ManhuntState() {
-        this(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), false);
+        this(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), false, List.of());
     }
 
     private ManhuntState(Optional<Hunt> hunt, Optional<Boolean> locatorBarBeforeHunt,
-                         Optional<UUID> worldId, Optional<Completion> completedRun, boolean linkedTransferPending) {
+                         Optional<UUID> worldId, Optional<Completion> completedRun, boolean linkedTransferPending,
+                         List<UUID> excludedDragonDefeats) {
         this.hunt = hunt;
         this.locatorBarBeforeHunt = hunt.isPresent() ? locatorBarBeforeHunt : Optional.empty();
         this.worldId = worldId.orElseGet(UUID::randomUUID);
         this.completedRun = hunt.isEmpty() ? completedRun : Optional.empty();
         this.linkedTransferPending = linkedTransferPending;
         identityNeedsSave = worldId.isEmpty();
+        identityEstablished = worldId.isPresent();
+        this.excludedDragonDefeats = new HashSet<>(excludedDragonDefeats);
     }
 
     static ManhuntState get(MinecraftServer server) {
@@ -63,6 +74,16 @@ final class ManhuntState extends SavedData {
     }
 
     UUID worldId() { return worldId; }
+
+    boolean hasEstablishedWorldIdentity() { return identityEstablished; }
+
+    void confirmWorldIdentity() { identityEstablished = true; }
+
+    void excludeDragonDefeat(UUID dragonId) {
+        if (excludedDragonDefeats.add(dragonId)) setDirty();
+    }
+
+    boolean isDragonDefeatExcluded(UUID dragonId) { return excludedDragonDefeats.contains(dragonId); }
 
     Optional<Completion> completedRun() { return completedRun; }
 
@@ -81,6 +102,8 @@ final class ManhuntState extends SavedData {
         linkedTransferPending = saved.linkedTransferPending;
         ticksUntilUpdate = saved.ticksUntilUpdate;
         identityNeedsSave = false;
+        identityEstablished = saved.hasEstablishedWorldIdentity();
+        excludedDragonDefeats = new HashSet<>(saved.excludedDragonDefeats);
         setDirty();
     }
 
@@ -93,6 +116,7 @@ final class ManhuntState extends SavedData {
     }
 
     void start(ServerPlayer runner, UUID runId) {
+        excludedDragonDefeats.clear();
         hunt = Optional.of(new Hunt(runner.getUUID(), runner.getGameProfile().name(), positionOf(runner), runId));
         completedRun = Optional.empty();
         locatorBarBeforeHunt = Optional.empty();
@@ -102,6 +126,7 @@ final class ManhuntState extends SavedData {
     }
 
     void stop(MinecraftServer server) {
+        excludedDragonDefeats.clear();
         locatorBarBeforeHunt.ifPresent(previous -> setLocatorBar(server, previous));
         hunt = Optional.empty();
         completedRun = Optional.empty();

@@ -30,6 +30,8 @@ class ControllerStoreTest {
         transition.destinationBackend = "b";
         transition.destinationWorldId = state.activeWorldId;
         transition.nextRunId = UUID.randomUUID();
+        transition.requiredParticipants.add(runner);
+        transition.confirmedArrivals.add(runner);
         transition.moved = true;
         transition.selectedRunner = UUID.randomUUID();
         state.transition = transition;
@@ -40,7 +42,31 @@ class ControllerStoreTest {
         assertEquals(state.retired.get("a"), restored.retired.get("a"));
         assertEquals(transition.nextRunId, restored.transition.nextRunId);
         assertEquals(transition.selectedRunner, restored.transition.selectedRunner);
+        assertEquals(transition.requiredParticipants, restored.transition.requiredParticipants);
+        assertEquals(transition.confirmedArrivals, restored.transition.confirmedArrivals);
         assertTrue(restored.transition.moved);
+    }
+
+    @Test
+    void legacyUnfinishedTransferWithoutParticipantsFailsClosed() throws Exception {
+        Path path = temporary.resolve("controller.json");
+        var json = new com.google.gson.JsonObject();
+        json.addProperty("schemaVersion", 1);
+        json.add("selections", new com.google.gson.JsonObject());
+        json.add("retired", new com.google.gson.JsonObject());
+        var transition = new com.google.gson.JsonObject();
+        transition.addProperty("sourceBackend", "a");
+        transition.addProperty("sourceWorldId", UUID.randomUUID().toString());
+        transition.addProperty("sourceRunId", UUID.randomUUID().toString());
+        transition.addProperty("previousRunner", UUID.randomUUID().toString());
+        transition.addProperty("destinationBackend", "b");
+        transition.addProperty("destinationWorldId", UUID.randomUUID().toString());
+        transition.addProperty("nextRunId", UUID.randomUUID().toString());
+        json.add("transition", transition);
+        Files.writeString(path, json.toString());
+        assertThrows(java.io.IOException.class, () -> new ControllerStore(path).load(),
+                "Old pending transfers cannot prove which disconnected players still need to arrive");
+        assertEquals(json.toString(), Files.readString(path));
     }
 
     @Test

@@ -57,12 +57,17 @@ final class ControllerStore {
         UUID nextRunId;
         UUID selectedRunner;
         Set<UUID> authorizedRunners = new LinkedHashSet<>();
+        Set<UUID> requiredParticipants = new LinkedHashSet<>();
+        Set<UUID> confirmedArrivals = new LinkedHashSet<>();
         boolean moved;
 
         void validate() {
             if (sourceBackend == null || sourceBackend.isBlank() || sourceWorldId == null || sourceRunId == null
                     || previousRunner == null || nextRunId == null
-                    || authorizedRunners == null
+                    || authorizedRunners == null || requiredParticipants == null || confirmedArrivals == null
+                    || requiredParticipants.contains(null) || confirmedArrivals.contains(null)
+                    || !requiredParticipants.containsAll(confirmedArrivals)
+                    || (moved && !confirmedArrivals.containsAll(requiredParticipants))
                     || (destinationBackend == null) != (destinationWorldId == null)
                     || (moved && destinationBackend == null) || (selectedRunner != null && !moved)
                     || (!authorizedRunners.isEmpty() && !moved)
@@ -87,6 +92,12 @@ final class ControllerStore {
             }
             State state = new Gson().fromJson(json, State.class);
             if (state == null) throw new IllegalArgumentException("Empty controller state");
+            if (state.transition != null && !state.transition.moved) {
+                var transition = json.getAsJsonObject("transition");
+                if (!transition.has("requiredParticipants") || !transition.has("confirmedArrivals")) {
+                    throw new IllegalArgumentException("Unfinished rotation has no durable transfer participants");
+                }
+            }
             state.validate();
             return state;
         } catch (RuntimeException exception) {

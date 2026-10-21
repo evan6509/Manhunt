@@ -53,7 +53,8 @@ Stop the current hunt before choosing a different runner.
   whenever needed.
 - Runner death gives the hunters a win. An Ender Dragon defeat credited to the
   runner gives the runner a win. Hunter deaths do not end the hunt.
-  `/manhunt stop` also ends it manually.
+  A dragon already dying when a hunt starts cannot win that hunt, including
+  after the hunt is saved and reloaded. `/manhunt stop` also ends it manually.
 - Standalone hunts end in the current world. The Docker network holds players
   in spectator mode while transferring them to the next fresh world, where
   they begin with fresh inventories and world progress.
@@ -78,6 +79,12 @@ backend crash restarts the same world; only an acknowledged completed run can
 authorize an archive/reset. Invalid, stale, occupied, or failed transfers do
 not authorize resetting the source. Finished worlds cannot start another hunt.
 If no fresh backend is available, the group waits rather than reusing a world.
+Required participants and confirmed arrivals are saved before a rotation can
+authorize a reset; disconnecting does not erase an outstanding transfer.
+Older proxy journals with unfinished transfers and no participant records are
+rejected and leave the source world intact. Backend startup also rejects a
+checkpoint whose world identity conflicts with native saved data; missing native
+identities can still recover from a checkpoint with a consistent hunt lifecycle.
 
 Follow [Docker setup and launch instructions](docs/DOCKER.md). This setup is
 separate from Linked Hardcore and uses its own volume and host port. Old worlds

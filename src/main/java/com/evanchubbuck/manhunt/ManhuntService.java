@@ -25,6 +25,12 @@ final class ManhuntService {
         ManhuntState state = ManhuntState.get(server);
         if (state.hunt().isPresent() || !ManhuntNetwork.canStart(server, runId)) return false;
         state.start(runner, runId == null ? UUID.randomUUID() : runId);
+        // Defeats already in progress belong to an earlier run, including their later death callbacks.
+        for (var level : server.getAllLevels()) {
+            for (var dragon : level.getDragons()) {
+                if (isDragonDefeated(dragon)) state.excludeDragonDefeat(dragon.getUUID());
+            }
+        }
         if (!ManhuntNetwork.changed(server)) {
             state.stop(server);
             return false;
@@ -79,11 +85,16 @@ final class ManhuntService {
     }
 
     static boolean runnerDefeatedDragon(MinecraftServer server, EnderDragon dragon) {
-        if (dragon.getHealth() > 0 && dragon.getPhaseManager().getCurrentPhase().getPhase() != EnderDragonPhase.DYING) return false;
-        if (dragon.getKillCredit() instanceof ServerPlayer player && ManhuntState.get(server).isRunner(player)) {
+        var state = ManhuntState.get(server);
+        if (!isDragonDefeated(dragon) || state.isDragonDefeatExcluded(dragon.getUUID())) return false;
+        if (dragon.getKillCredit() instanceof ServerPlayer player && state.isRunner(player)) {
             return finish(server, "runner_won");
         }
         return false;
+    }
+
+    private static boolean isDragonDefeated(EnderDragon dragon) {
+        return dragon.getHealth() <= 0 || dragon.getPhaseManager().getCurrentPhase().getPhase() == EnderDragonPhase.DYING;
     }
 
     static void tick(MinecraftServer server) {
@@ -104,8 +115,7 @@ final class ManhuntService {
         // Also recognize the dragon's special DYING phase, which retains 1 HP during its final flight.
         for (var level : server.getAllLevels()) {
             for (var dragon : level.getDragons()) {
-                if ((dragon.getPhaseManager().getCurrentPhase().getPhase() == EnderDragonPhase.DYING || dragon.getHealth() <= 0)
-                        && runnerDefeatedDragon(server, dragon)) return;
+                if (runnerDefeatedDragon(server, dragon)) return;
             }
         }
         ServerPlayer runner = server.getPlayerList().getPlayer(active.get().runnerId());

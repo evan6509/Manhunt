@@ -163,16 +163,17 @@ final class ManhuntNetwork {
                 }
                 var saved = ManhuntState.CODEC.parse(JsonOps.INSTANCE, checkpoint.state()).getOrThrow();
                 var current = ManhuntState.get(server);
-                if (current.worldId().equals(saved.worldId())) {
-                    if (current.completedRun().isPresent() && !current.completedRun().equals(saved.completedRun())) {
-                        throw new IOException("Checkpoint would roll a completed hunt backward");
-                    }
-                    if (current.hunt().isPresent()) {
-                        UUID runId = current.hunt().orElseThrow().runId();
-                        boolean sameActive = saved.hunt().map(hunt -> hunt.runId().equals(runId)).orElse(false);
-                        boolean sameFinished = saved.completedRun().map(run -> run.runId().equals(runId)).orElse(false);
-                        if (!sameActive && !sameFinished) throw new IOException("Checkpoint would forget an active hunt");
-                    }
+                if (current.hasEstablishedWorldIdentity() && !current.worldId().equals(saved.worldId())) {
+                    throw new IOException("Checkpoint belongs to a different world");
+                }
+                if (current.completedRun().isPresent() && !current.completedRun().equals(saved.completedRun())) {
+                    throw new IOException("Checkpoint would roll a completed hunt backward");
+                }
+                if (current.hunt().isPresent()) {
+                    UUID runId = current.hunt().orElseThrow().runId();
+                    boolean sameActive = saved.hunt().map(hunt -> hunt.runId().equals(runId)).orElse(false);
+                    boolean sameFinished = saved.completedRun().map(run -> run.runId().equals(runId)).orElse(false);
+                    if (!sameActive && !sameFinished) throw new IOException("Checkpoint would forget an active hunt");
                 }
                 current.restoreNetworkCheckpoint(saved);
             } catch (IOException | RuntimeException error) {
@@ -210,6 +211,7 @@ final class ManhuntNetwork {
                 // authoritative on reboot, and must succeed before advertising readiness or completion.
                 NetworkFiles.writeAtomic(checkpointFile(server), new DurableState(NetworkFiles.SCHEMA,
                         ManhuntState.CODEC.encodeStart(JsonOps.INSTANCE, state).getOrThrow()));
+                state.confirmWorldIdentity();
             } catch (IOException | RuntimeException error) {
                 LOGGER.error("Unable to persist Manhunt network state; transition will wait", error);
                 return false;
