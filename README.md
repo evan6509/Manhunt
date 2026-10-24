@@ -8,6 +8,18 @@ runner for the next round. Download the mod JAR from
 Fabric API **0.154.2+26.2 or newer for 26.2** in the server's `mods` folder,
 using Fabric Loader **0.19.3 or newer** and **Java 25**.
 
+The latest public release, [v1.0.0](https://github.com/evan6509/Manhunt/releases/tag/v1.0.0),
+was published **2026-10-13** and verified on **2026-10-24**. Its Fabric 26.2
+assets are the [mod JAR](https://github.com/evan6509/Manhunt/releases/download/v1.0.0/manhunt-1.0.0%2Bmc26.2.jar),
+[Velocity plugin](https://github.com/evan6509/Manhunt/releases/download/v1.0.0/manhunt-velocity-1.0.0%2Bmc26.2.jar),
+[Docker package](https://github.com/evan6509/Manhunt/releases/download/v1.0.0/manhunt-docker-1.0.0%2Bmc26.2.zip),
+[changelog](https://github.com/evan6509/Manhunt/releases/download/v1.0.0/CHANGELOG.md),
+and [SHA256SUMS](https://github.com/evan6509/Manhunt/releases/download/v1.0.0/SHA256SUMS).
+This README also describes `codex/development`, including Linked Hardcore
+integration and later transfer/recovery safeguards not established as part of
+v1.0.0. Build that branch to use those changes. The build targets
+**Minecraft 26.2 only**; it does not establish 26.3 support.
+
 This mod runs on the server. Hunters can connect with unmodified Minecraft
 26.2 clients. For singleplayer/LAN, install it and Fabric API on the host.
 
@@ -40,9 +52,10 @@ Stop the current hunt before choosing a different runner.
 - Joining hunters and respawned hunters receive a compass. A full inventory
   drops the compass at their feet without replacing existing items.
 - Ordinary compasses are never modified. Stored/dropped hunting compasses
-  receive the current snapshot within a second of becoming accessible in a
-  hunter's inventory or open container. Closed containers and offline player
-  inventories are not scanned.
+  receive the current snapshot within **20 server ticks** of becoming accessible
+  in a hunter's inventory or open container. Online players' ender chest
+  inventories are also scanned, even when closed; other closed containers and
+  offline player inventories are not scanned.
 - The hunt and last recorded location are saved with the world and survive
   server restarts; the minute timer starts again when the world loads.
 - Starting a hunt immediately disables the vanilla locator bar for everyone
@@ -100,11 +113,14 @@ secret; backend ports stay private.
 
 ## Using your Linked Hardcore setup
 
-Manhunt automatically detects the Fabric mod from
+The development branch automatically detects the Fabric mod from
 [Linked Hardcore](https://github.com/evan6509/linked-hardcore). Install this
-Manhunt JAR on **every Linked Hardcore backend**, alongside Linked Hardcore and
+Manhunt JAR built from this branch on **every Linked Hardcore backend**,
+alongside Linked Hardcore and
 Fabric API **0.156.0+26.2 or newer for 26.2**. Keep your existing Linked Hardcore
-proxy, configuration, and reset executor. No Manhunt plugin belongs on that
+proxy configuration and reset executor, but update both mods on every backend
+and the Linked Hardcore proxy together to the compatible durable-outbox protocol
+(contract version 3). No Manhunt plugin belongs on that
 proxy. Leave `enabled` set to `false` in `config/manhunt/network.json`;
 starting both world controllers together is rejected with a configuration error.
 
@@ -149,7 +165,8 @@ Use a JDK 25 installation, then run:
 
 The installable mod is `build/libs/manhunt-1.0.0+mc26.2.jar`; the Velocity plugin
 is `velocity-plugin/build/libs/manhunt-velocity-1.0.0+mc26.2.jar`. The `-sources.jar`
-is source code, not a second mod to install. Tests are in a separate source set
+is source code, not a second mod to install. Fabric GameTests are in a separate
+source set
 and are excluded from the installable JAR. The GameTest report is written to
 `build/gametest-results.xml`.
 
@@ -163,6 +180,19 @@ This loads the actual companion with Fabric API 0.156.0+26.2 and tests its
 transformed death-report and transfer code. Its report is
 `build/gametest-linked-hardcore-results.xml`. The external JAR is used only by
 the test runtime and is never bundled in the installable Manhunt JAR.
+
+The default build includes the Velocity plugin's unit tests. To check the
+Docker rotation controller separately, run:
+
+```sh
+python3 -m unittest discover -s docker -p 'test_*.py' -v
+```
+
+These commands describe automated validation; they do not establish a test pass
+for this checkout. The companion suite requires an operator-supplied compatible
+JAR and is not run by the default GitHub Actions workflow. Automated tests and
+JAR checks do not demonstrate connected-player gameplay or a deployed proxy
+rotation; verify those separately.
 
 The implementation follows Fabric's [command registration API](https://docs.fabricmc.net/develop/commands/basics)
 and [server GameTest framework](https://docs.fabricmc.net/develop/automatic-testing).
@@ -179,23 +209,28 @@ git config core.hooksPath scripts/git-hooks
 ```
 
 The guard prevents ordinary direct commits to `main` in clones where it is
-installed. GitHub requires a paid plan to enforce protected branches in this
-private repository, so the PR workflow is documented but is not enforced by
-GitHub's branch-protection settings.
+installed. GitHub previously refused private-repository branch protection on
+the account's
+plan. Follow the reviewed-PR policy and do not assume remote enforcement.
+Merging, publishing, or pushing `main` requires explicit authorization;
+a successful push to `main` triggers publication.
 
 GitHub Actions builds and tests development pushes and pull requests. A
 successful update to `main` builds the mod with Java 25, runs GameTests, checks
 the installable JAR, and publishes a release. Manual workflow runs only build
 and test.
 
-The first release is `v1.0.0`; later releases increment the patch version
+The release series starts at `v1.0.0`; later releases increment the patch version
 automatically. The version is embedded in the mod and its filename. You can
 raise `mod_version` in `gradle.properties` to begin a larger version, such as
 `2.0.0`. Retries reuse the release for the same commit. Pending `main` runs are
 queued so version selection and publication do not overlap.
 
-Each release contains the Fabric JAR, Velocity plugin JAR, Docker source ZIP,
-`CHANGELOG.md`, and `SHA256SUMS`.
+The release workflow packages `manhunt-<version>+mc26.2.jar`,
+`manhunt-velocity-<version>+mc26.2.jar`,
+`manhunt-docker-<version>+mc26.2.zip`, `CHANGELOG.md`, and `SHA256SUMS`.
+For v1.0.0, `<version>` is `1.0.0`; these naming patterns come from the
+packaging configuration, not a live asset verification.
 The release description includes GitHub-generated PR notes, linked commits
 since the previous release, and installation requirements. Assets are staged
 in a draft and downloaded for verification before publication.
