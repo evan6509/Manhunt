@@ -29,7 +29,7 @@ REQUIRED_FILES = {
     "shared/src/main/java/com/evanchubbuck/manhunt/network/NetworkFiles.java",
 }
 SOURCE_PREFIXES = (
-    "src/main/java/", "src/gametest/java/", "src/test/java/",
+    "src/main/java/", "src/26.2/java/", "src/26.3/java/", "src/gametest/java/", "src/test/java/",
     "shared/src/main/java/", "shared/src/test/java/",
     "velocity-plugin/src/main/java/", "velocity-plugin/src/test/java/",
 )

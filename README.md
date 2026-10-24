@@ -1,4 +1,4 @@
-# Manhunt for Fabric 26.2
+# Manhunt for Fabric 26.2 and 26.3
 
 One player is the runner. Everyone else is a hunter with a compass pointing to
 the runner's last recorded location. The optional Docker/Velocity setup moves
@@ -7,6 +7,9 @@ runner for the next round. Download the mod JAR from
 [GitHub Releases](https://github.com/evan6509/Manhunt/releases) and install it with
 Fabric API **0.154.2+26.2 or newer for 26.2** in the server's `mods` folder,
 using Fabric Loader **0.19.3 or newer** and **Java 25**.
+Development builds also provide a separate **26.3** JAR requiring Fabric API
+**0.165.0+26.3 or newer for 26.3**. Install only the JAR matching your server;
+26.2 remains the default build and Docker target.
 
 The latest public release, [v1.0.0](https://github.com/evan6509/Manhunt/releases/tag/v1.0.0),
 was published **2026-10-13** and verified on **2026-10-24**. Its Fabric 26.2
@@ -17,11 +20,13 @@ assets are the [mod JAR](https://github.com/evan6509/Manhunt/releases/download/v
 and [SHA256SUMS](https://github.com/evan6509/Manhunt/releases/download/v1.0.0/SHA256SUMS).
 This README also describes `codex/development`, including Linked Hardcore
 integration and later transfer/recovery safeguards not established as part of
-v1.0.0. Build that branch to use those changes. The build targets
-**Minecraft 26.2 only**; it does not establish 26.3 support.
+v1.0.0. Build that branch to use those changes. The development branch builds
+separate artifacts for **26.2 and 26.3**;
+this does not add 26.3 assets to the existing v1.0.0 release.
 
 This mod runs on the server. Hunters can connect with unmodified Minecraft
-26.2 clients. For singleplayer/LAN, install it and Fabric API on the host.
+clients matching the server version. For singleplayer/LAN, install it and Fabric
+API on the host.
 
 ## Commands
 
@@ -117,7 +122,10 @@ The development branch automatically detects the Fabric mod from
 [Linked Hardcore](https://github.com/evan6509/linked-hardcore). Install this
 Manhunt JAR built from this branch on **every Linked Hardcore backend**,
 alongside Linked Hardcore and
-Fabric API **0.156.0+26.2 or newer for 26.2**. Keep your existing Linked Hardcore
+Fabric API **0.156.0+26.2 or newer for 26.2**, or **0.165.0+26.3 or newer for
+26.3**. Use a Linked Hardcore artifact built for the same Minecraft target;
+Manhunt's standalone 26.3 tests do not establish companion integration.
+Keep your existing Linked Hardcore
 proxy configuration and reset executor, but update both mods on every backend
 and the Linked Hardcore proxy together to the compatible durable-outbox protocol
 (contract version 3). No Manhunt plugin belongs on that
@@ -160,23 +168,34 @@ replace or delete an active world's files to install the mod.
 Use a JDK 25 installation, then run:
 
 ```sh
-./gradlew --no-daemon build runGametest
+export JAVA_HOME=/path/to/jdk-25
+./gradlew --no-daemon --max-workers=1 --project-cache-dir .gradle/26.2 clean build runGametest
+python3 scripts/verify_mod_jar.py
+./gradlew --no-daemon --max-workers=1 --project-cache-dir .gradle/26.3 -Pminecraft_version=26.3 build runGametest
+python3 scripts/verify_mod_jar.py build/26.3/libs 26.3
 ```
 
-The installable mod is `build/libs/manhunt-1.0.0+mc26.2.jar`; the Velocity plugin
+Run the targets sequentially in this order: the default `clean` removes all of
+`build/`, including 26.3 output. Unsupported targets fail at configuration time.
+The installable mods are `build/libs/manhunt-1.0.0+mc26.2.jar` and
+`build/26.3/libs/manhunt-1.0.0+mc26.3.jar`; the Velocity plugin
 is `velocity-plugin/build/libs/manhunt-velocity-1.0.0+mc26.2.jar`. The `-sources.jar`
 is source code, not a second mod to install. Fabric GameTests are in a separate
 source set
 and are excluded from the installable JAR. The GameTest report is written to
-`build/gametest-results.xml`.
+`build/gametest-results.xml` for 26.2 and `build/26.3/gametest-results.xml`
+for 26.3.
 
 Run the separate compatibility suite against a built Linked Hardcore Fabric JAR:
 
 ```sh
-./gradlew --no-daemon runGametest -PlinkedHardcoreJar=/absolute/path/to/fabric-mod-0.1.0.jar
+./gradlew --no-daemon --max-workers=1 runGametest -PlinkedHardcoreJar=/absolute/path/to/fabric-mod-0.1.0.jar
 ```
 
-This loads the actual companion with Fabric API 0.156.0+26.2 and tests its
+For 26.3, add `-Pminecraft_version=26.3 --project-cache-dir .gradle/26.3` and
+supply an actual 26.3 companion JAR. The 26.3 suite uses Fabric API 0.165.0+26.3
+and writes `build/26.3/gametest-linked-hardcore-results.xml`.
+This loads the actual companion (with Fabric API 0.156.0+26.2 for 26.2) and tests its
 transformed death-report and transfer code. Its report is
 `build/gametest-linked-hardcore-results.xml`. The external JAR is used only by
 the test runtime and is never bundled in the installable Manhunt JAR.
@@ -226,7 +245,7 @@ raise `mod_version` in `gradle.properties` to begin a larger version, such as
 `2.0.0`. Retries reuse the release for the same commit. Pending `main` runs are
 queued so version selection and publication do not overlap.
 
-The release workflow packages `manhunt-<version>+mc26.2.jar`,
+The release workflow packages `manhunt-<version>+mc26.2.jar`, `manhunt-<version>+mc26.3.jar`,
 `manhunt-velocity-<version>+mc26.2.jar`,
 `manhunt-docker-<version>+mc26.2.zip`, `CHANGELOG.md`, and `SHA256SUMS`.
 For v1.0.0, `<version>` is `1.0.0`; these naming patterns come from the
@@ -245,6 +264,7 @@ python3 scripts/verify_mod_jar.py
 To check another embedded version without editing the project version:
 
 ```sh
-MANHUNT_VERSION=1.0.1 ./gradlew --no-daemon clean build runGametest
+MANHUNT_VERSION=1.0.1 ./gradlew --no-daemon --max-workers=1 --project-cache-dir .gradle/26.2 clean build runGametest
+MANHUNT_VERSION=1.0.1 ./gradlew --no-daemon --max-workers=1 --project-cache-dir .gradle/26.3 -Pminecraft_version=26.3 build runGametest
 MANHUNT_VERSION=1.0.1 python3 scripts/verify_mod_jar.py
 ```

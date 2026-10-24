@@ -12,6 +12,10 @@ runner who differs from the previous runner. At least two connected players are
 needed to choose another runner; otherwise the next hunt waits. The compass
 updates every minute and the locator bar is disabled during each hunt.
 
+The separate Fabric 26.3 artifact does not change this deployment's target.
+Docker explicitly builds 26.2; the pinned forwarding mod and complete proxy
+rotation have not been validated here for 26.3.
+
 ## Setup
 
 Install Docker Engine with Compose, or Docker Desktop. The defaults allocate

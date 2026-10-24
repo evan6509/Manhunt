@@ -71,11 +71,11 @@ class VersionTests(unittest.TestCase):
 class JarTests(unittest.TestCase):
     def fixture(self, folder, embedded="1.0.1+mc26.2", include_tests=False):
         jar = Path(folder) / "manhunt-1.0.1+mc26.2.jar"
-        metadata = dict(id="manhunt", version=embedded, depends={"minecraft": "26.2", "java": ">=25"},
+        metadata = dict(id="manhunt", version=embedded, depends={"minecraft": "26.2", "java": ">=25", "fabric-api": ">=0.154.2", "fabricloader": ">=0.19.3"},
                         mixins=["manhunt.mixins.json"])
         with ZipFile(jar, "w") as archive:
             archive.writestr("fabric.mod.json", json.dumps(metadata))
-            for name in ["ManhuntMod", "ManhuntCommands", "ManhuntState", "ManhuntState$Hunt",
+            for name in ["ManhuntMod", "MinecraftCompat", "ManhuntCommands", "ManhuntState", "ManhuntState$Hunt",
                          "ManhuntService", "TrackingCompass", "LinkedHardcoreCompat", "ManhuntMixinPlugin",
                          "mixin/LinkedHardcoreDeathMixin", "mixin/LinkedHardcoreTransferMixin"]:
                 archive.writestr(f"com/evanchubbuck/manhunt/{name}.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x45")
@@ -250,16 +250,26 @@ class ReleaseAssetsTests(unittest.TestCase):
         plugin = VelocityJarTests().fixture(folder)
         archive = root / "manhunt-docker-1.0.1+mc26.2.zip"
         create_archive(root, archive, "1.0.1")
+        second = root / "manhunt-1.0.1+mc26.3.jar"
+        with ZipFile(mod) as source, ZipFile(second, 'w') as output:
+            for name in source.namelist():
+                data = source.read(name)
+                if name == 'fabric.mod.json':
+                    metadata = json.loads(data)
+                    metadata['version'] = '1.0.1+mc26.3'
+                    metadata['depends'].update({'minecraft': '26.3', 'fabric-api': '>=0.165.0'})
+                    data = json.dumps(metadata)
+                output.writestr(name, data)
         assets = root / "assets"
         assets.mkdir()
-        for path in (mod, plugin, archive):
+        for path in (mod, second, plugin, archive):
             path.rename(assets / path.name)
         return root, assets
 
     def test_combined_artifacts_and_missing_or_extra_plugin(self):
         with tempfile.TemporaryDirectory() as folder:
             _, assets = self.fixture(folder)
-            self.assertEqual(len(verify_assets(assets, "1.0.1")[0]), 3)
+            self.assertEqual(len(verify_assets(assets, "1.0.1")[0]), 4)
             plugin = assets / "manhunt-velocity-1.0.1+mc26.2.jar"
             plugin.rename(assets / "unexpected.jar")
             with self.assertRaisesRegex(ValueError, "exact release assets"):
@@ -271,14 +281,17 @@ class ReleaseAssetsTests(unittest.TestCase):
     def test_staging_verifies_both_jars_and_deployment(self):
         with tempfile.TemporaryDirectory() as folder:
             root, assets = self.fixture(folder)
+            (root / "build/26.3/libs").mkdir(parents=True)
             (root / "build/libs").mkdir(parents=True)
             (root / "velocity-plugin/build/libs").mkdir(parents=True)
             for path in list(assets.glob("*.jar")):
                 directory = "velocity-plugin/build/libs" if "velocity" in path.name else "build/libs"
+                if '+mc26.3' in path.name:
+                    directory = 'build/26.3/libs'
                 path.rename(root / directory / path.name)
             output = root / "build/release"
-            self.assertEqual(len(stage(root, output, "1.0.1")), 3)
-            self.assertEqual(len(verify_assets(output, "1.0.1")[0]), 3)
+            self.assertEqual(len(stage(root, output, "1.0.1")), 4)
+            self.assertEqual(len(verify_assets(output, "1.0.1")[0]), 4)
             with self.assertRaisesRegex(ValueError, "must be empty"):
                 stage(root, output, "1.0.1")
 
@@ -293,7 +306,9 @@ class PublicationTests(unittest.TestCase):
         plugin.write_bytes(b"verified velocity plugin fixture")
         deployment = directory / f"manhunt-docker-{version}+mc26.2.zip"
         deployment.write_bytes(b"verified docker deployment fixture")
-        build_assets = [jar, plugin, deployment]
+        second = directory / f"manhunt-{version}+mc26.3.jar"
+        second.write_bytes(b"verified 26.3 installable jar fixture")
+        build_assets = [jar, second, plugin, deployment]
         metadata = dict(version=f"{version}+mc26.2", depends={"minecraft": "26.2", "fabricloader": ">=0.19.3",
                                                       "fabric-api": ">=0.154.2", "java": ">=25"})
         calls = []
@@ -343,12 +358,14 @@ class PublicationTests(unittest.TestCase):
             self.assertLess(download, publish)
             self.assertIn("--latest", calls[publish])
             self.assertIn("Test change in #1", (Path(folder) / "CHANGELOG.md").read_text())
+            self.assertIn("manhunt-1.0.0+mc26.3.jar", (Path(folder) / "CHANGELOG.md").read_text())
+            self.assertIn("0.165.0", (Path(folder) / "CHANGELOG.md").read_text())
             self.assertIn("Direct commit change", (Path(folder) / "CHANGELOG.md").read_text())
             self.assertIn("SHA256SUMS", " ".join(creation))
             self.assertIn("manhunt-velocity-1.0.0+mc26.2.jar", " ".join(creation))
             self.assertIn("manhunt-docker-1.0.0+mc26.2.zip", " ".join(creation))
             checksums = (Path(folder) / "SHA256SUMS").read_text()
-            self.assertEqual(len(checksums.splitlines()), 4)
+            self.assertEqual(len(checksums.splitlines()), 5)
             self.assertIn("manhunt-velocity", checksums)
             self.assertIn("manhunt-docker", checksums)
 
@@ -406,7 +423,7 @@ class PublicationTests(unittest.TestCase):
     def test_published_rerun_does_not_modify_assets(self):
         existing = release("v1.0.0", COMMIT)
         existing["assets"] = [dict(name=name, state="uploaded") for name in
-                              ["manhunt-1.0.0+mc26.2.jar", "manhunt-velocity-1.0.0+mc26.2.jar",
+                              ["manhunt-1.0.0+mc26.2.jar", "manhunt-1.0.0+mc26.3.jar", "manhunt-velocity-1.0.0+mc26.2.jar",
                                "manhunt-docker-1.0.0+mc26.2.zip", "CHANGELOG.md", "SHA256SUMS"]]
         with tempfile.TemporaryDirectory() as folder:
             calls = self.run_publication(folder, existing=existing, releases=[release("v1.0.1")])

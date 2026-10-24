@@ -55,7 +55,7 @@ def commit_notes(previous, commit, repository):
 
 
 def write_changelog(path, version, assets, metadata, notes, repository, commit, commits):
-    jar, plugin, deployment = assets
+    jar, second, plugin, deployment = assets
     depends = metadata["depends"]
     requirements = ", ".join(f"{name} `{depends[key]}`" for key, name in (
         ("minecraft", "Minecraft"), ("fabricloader", "Fabric Loader"),
@@ -64,7 +64,10 @@ def write_changelog(path, version, assets, metadata, notes, repository, commit, 
         f"# Manhunt {version}\n\n{notes.strip()}\n\n"
         f"## Commits\n\n{commits}\n\n"
         f"## Install\n\nDownload `{jar.name}` and put it in the server's `mods` folder.\n\n"
-        f"Requirements: {requirements}.\n\n"
+        f"Requirements for 26.2: {requirements}.\n\n"
+        f"For Minecraft 26.3 use `{second.name}` with Fabric API `>=0.165.0` "
+        f"for 26.3, Fabric Loader `>=0.19.3`, and Java `>=25`. "
+        f"Install only the Fabric JAR matching the server version.\n\n"
         f"For automatic fresh worlds, use `{deployment.name}`. Extract it, copy `.env.example` "
         f"to `.env`, accept the Minecraft EULA and set a private forwarding secret there, "
         f"then run `docker compose up -d --build`. "
@@ -124,7 +127,7 @@ def main():
         f"{hashlib.sha256(asset.read_bytes()).hexdigest()}  {asset.name}\n"
         for asset in [*build_assets, changelog]), encoding="utf-8")
     assets = [*build_assets, changelog, checksums]
-    title = f"Manhunt {version} (Minecraft {metadata['depends']['minecraft']})"
+    title = f"Manhunt {version} (Minecraft 26.2 and 26.3)"
     if existing is None:
         gh("release", "create", tag, *(str(asset) for asset in assets), "--repo", repository,
            "--title", title, "--notes-file", str(changelog), "--target", commit, "--draft")

@@ -75,9 +75,13 @@ jobs:
           FORWARDING_SECRET: ci-config-validation-only
         run: docker compose config --quiet
       - name: Build and test the mod and Velocity plugin
-        run: ./gradlew --no-daemon clean build runGametest
+        run: ./gradlew --no-daemon --max-workers=1 --project-cache-dir .gradle/26.2 clean build runGametest
       - name: Verify Fabric mod
         run: python3 scripts/verify_mod_jar.py
+      - name: Build and test Fabric 26.3 separately
+        run: ./gradlew --no-daemon --max-workers=1 --project-cache-dir .gradle/26.3 -Pminecraft_version=26.3 build runGametest
+      - name: Verify Fabric 26.3 mod
+        run: python3 scripts/verify_mod_jar.py build/26.3/libs 26.3
       - name: Verify Velocity plugin
         run: python3 scripts/verify_velocity_jar.py
       - name: Package Fabric, Velocity, and Docker artifacts
@@ -95,6 +99,9 @@ jobs:
         with:
           name: test-reports
           path: |
+            build/26.3/gametest-results.xml
+            build/26.3/gametest/logs/latest.log
+            build/26.3/reports/
             build/gametest-results.xml
             build/gametest/logs/latest.log
             build/reports/

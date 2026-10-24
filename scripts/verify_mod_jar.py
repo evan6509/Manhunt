@@ -8,14 +8,16 @@ import struct
 import sys
 from zipfile import ZipFile
 
+from minecraft_target import target
 from release_version import parse_version, properties
 
 
-def verify(directory, version=None, companion_jars=()):
+def verify(directory, version=None, companion_jars=(), minecraft="26.2"):
     props = properties()
+    selected = target(minecraft)
     version = version or os.environ.get("MANHUNT_VERSION", props["mod_version"])
     parse_version(version)
-    full_version = f"{version}+mc{props['minecraft_version']}"
+    full_version = f"{version}+mc{minecraft}"
     filename = f"manhunt-{full_version}.jar"
     jars = [path for path in Path(directory).glob("*.jar")
             if not path.name.endswith("-sources.jar") and path.name not in companion_jars]
@@ -27,13 +29,18 @@ def verify(directory, version=None, companion_jars=()):
         metadata = json.loads(jar.read("fabric.mod.json"))
         if metadata["id"] != "manhunt" or metadata["version"] != full_version:
             raise ValueError("JAR mod identity or embedded version does not match this build")
-        if metadata["depends"]["minecraft"] != props["minecraft_version"]:
+        if metadata["depends"]["minecraft"] != minecraft:
             raise ValueError("JAR Minecraft dependency does not match this build")
+        for dependency, expected in [('fabric-api', selected['fabric_minimum']),
+                                     ('fabricloader', selected['loader_minimum'])]:
+            if metadata['depends'].get(dependency) != expected:
+                raise ValueError(f'JAR {dependency} dependency does not match this build')
         if metadata["depends"]["java"] != ">=25":
             raise ValueError("JAR must require Java 25")
         if metadata.get("mixins") != ["manhunt.mixins.json"]:
             raise ValueError("JAR must register the optional Linked Hardcore mixins")
         expected = {"LICENSE", "com/evanchubbuck/manhunt/ManhuntMod.class",
+                    "com/evanchubbuck/manhunt/MinecraftCompat.class",
                     "com/evanchubbuck/manhunt/ManhuntCommands.class",
                     "com/evanchubbuck/manhunt/ManhuntState.class",
                     "com/evanchubbuck/manhunt/ManhuntState$Hunt.class",
@@ -67,7 +74,9 @@ def verify(directory, version=None, companion_jars=()):
 
 
 def main():
-    jar, metadata = verify(sys.argv[1] if len(sys.argv) > 1 else "build/libs")
+    minecraft = sys.argv[2] if len(sys.argv) > 2 else '26.2'
+    directory = sys.argv[1] if len(sys.argv) > 1 else 'build/libs'
+    jar, metadata = verify(directory, minecraft=minecraft)
     if "GITHUB_OUTPUT" in os.environ:
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             output.write(f"jar={jar.as_posix()}\n")

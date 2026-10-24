@@ -1,7 +1,8 @@
 plugins { id 'java' }
 
 group = rootProject.group
-version = rootProject.version
+// The proxy is target-independent; preserve the established release filename.
+version = rootProject.version.toString().replaceFirst(/\+mc26\.3$/, '+mc26.2')
 base { archivesName = 'manhunt-velocity' }
 
 repositories {

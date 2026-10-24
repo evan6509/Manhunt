@@ -5,7 +5,7 @@ ARG MANHUNT_VERSION=1.0.0
 ENV MANHUNT_VERSION=${MANHUNT_VERSION}
 WORKDIR /src
 COPY . .
-RUN ./gradlew --no-daemon build \
+RUN ./gradlew --no-daemon --max-workers=1 -Pminecraft_version=26.2 build \
     && mkdir /out \
     && cp "build/libs/manhunt-${MANHUNT_VERSION}+mc26.2.jar" /out/manhunt.jar \
     && cp "velocity-plugin/build/libs/manhunt-velocity-${MANHUNT_VERSION}+mc26.2.jar" /out/manhunt-velocity.jar

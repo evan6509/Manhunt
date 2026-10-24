@@ -18,11 +18,12 @@ def stage(root=".", destination="build/release", version=None):
     root = Path(root)
     destination = Path(destination)
     mod, _ = verify_mod(root / "build/libs", version)
+    second, _ = verify_mod(root / "build/26.3/libs", version, minecraft="26.3")
     plugin, _ = verify_velocity(root / "velocity-plugin/build/libs", version)
     destination.mkdir(parents=True, exist_ok=True)
     if any(destination.iterdir()):
         raise ValueError(f"Release staging directory must be empty: {destination}")
-    for source in (mod, plugin):
+    for source in (mod, second, plugin):
         shutil.copyfile(source, destination / source.name)
     create_archive(root, destination / f"manhunt-docker-{version}+mc{props['minecraft_version']}.zip", version)
     return verify(destination, version)[0]

@@ -174,7 +174,7 @@ final class ManhuntService {
         if (player.getInventory().getFreeSlot() >= 0) player.getInventory().add(compass);
         if (!compass.isEmpty()) {
             // Preserve all existing items if the hunter's inventory is full.
-            var dropped = player.drop(compass, false, false);
+            var dropped = MinecraftCompat.dropCompass(player, compass);
             if (dropped != null) {
                 dropped.setTarget(player.getUUID());
                 dropped.setNoPickUpDelay();

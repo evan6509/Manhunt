@@ -1,6 +1,6 @@
 # Repository workflow
 
-- Minecraft target: Fabric 26.2, Java 25.
+- Minecraft targets: Fabric 26.2 (default/Docker) and 26.3, Java 25.
 - Optional network deployment: Velocity 4.0, two Fabric backends and Docker.
   Keep standalone mode available with the network bridge disabled by default.
 - Do routine work, edits, and commits on `codex/development`.
