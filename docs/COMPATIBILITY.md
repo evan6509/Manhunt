@@ -57,20 +57,15 @@ Standalone reports are `build/gametest-results.xml` and
 | `manhunt-1.0.0+mc26.2.jar` | `26.2` | `>=0.154.2` | `>=0.19.3` | `>=25` |
 | `manhunt-1.0.0+mc26.3.jar` | `26.3` | `>=0.165.0` | `>=0.19.3` | `>=25` |
 
-The optional companion suites used immutable local copies of actual Linked
-Hardcore JARs produced by the concurrent companion port, rather than substituting
-26.2 bytecode into the 26.3 runtime. Both identify version `0.1.0`:
+The optional companion suites used the matching Linked Hardcore 0.1.0 JARs,
+not substituted bytecode or bundled companion code. Their SHA-256 digests were:
 
-- 26.2 original: `../linked-hardcore/fabric-mod/build/libs/fabric-mod-0.1.0.jar`;
-  tested copy `/tmp/manhunt-linked-hardcore-26.2.jar`, SHA-256
-  `7425e9ed22b6cf7082fc179129d418c15d8ed663c8088b5be6befeda3bb422da`.
-- 26.3 original: `../linked-hardcore/fabric-mod/build/26.3/libs/fabric-mod-mc26.3-0.1.0.jar`;
-  tested copy `/tmp/manhunt-linked-hardcore-26.3.jar`, SHA-256
-  `4f33831d3ea1af3d8743ac6b44630e3b82388282dec11b0f10e1f5cbc57be308`.
+- 26.2: `7425e9ed22b6cf7082fc179129d418c15d8ed663c8088b5be6befeda3bb422da`.
+- 26.3: `4f33831d3ea1af3d8743ac6b44630e3b82388282dec11b0f10e1f5cbc57be308`.
 
-The integration command for each target adds
-`-PlinkedHardcoreJar=/tmp/manhunt-linked-hardcore-<target>.jar` to `runGametest`;
-26.3 also uses `-Pminecraft_version=26.3`. Each passed all 23 tests
+For a rerun, set `-PlinkedHardcoreJar=<path-to-matching-linked-hardcore-jar>`
+when invoking `runGametest`; 26.3 also uses `-Pminecraft_version=26.3`. Each
+passed all 23 tests
 (22 Manhunt integration tests plus `minecraft:always_pass`) with zero failures
 or errors. Standalone totals likewise include `minecraft:always_pass`. Reports are
 `build/gametest-linked-hardcore-results.xml` and

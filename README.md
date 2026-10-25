@@ -123,8 +123,9 @@ The development branch automatically detects the Fabric mod from
 Manhunt JAR built from this branch on **every Linked Hardcore backend**,
 alongside Linked Hardcore and
 Fabric API **0.156.0+26.2 or newer for 26.2**, or **0.165.0+26.3 or newer for
-26.3**. Use a Linked Hardcore artifact built for the same Minecraft target;
-Manhunt's standalone 26.3 tests do not establish companion integration.
+26.3**. Use a Linked Hardcore artifact built for the same Minecraft target. The 26.2
+and 26.3 companion integration GameTests and exact artifact hashes are recorded
+in [compatibility validation](docs/COMPATIBILITY.md).
 Keep your existing Linked Hardcore
 proxy configuration and reset executor, but update both mods on every backend
 and the Linked Hardcore proxy together to the compatible durable-outbox protocol
